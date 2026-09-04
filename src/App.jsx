@@ -3617,15 +3617,24 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   const isEntrada = form.tipo === "entrada";
 
   // uma escolha só, em vez de duas caixinhas soltas ("se repete todo mês" + "já foi
-  // pago") que davam pra marcar juntas sem querer e não tinham como dizer "parcelado"
-  const modo = form.recorrente ? "mensal" : Number(form.parcelas) > 1 ? "parcelado" : "unica";
-  const trocarModo = (novo) =>
-    setForm({
-      ...form,
+  // pago") que davam pra marcar juntas sem querer e não tinham como dizer "parcelado".
+  //
+  // O modo é ESTADO PRÓPRIO, não deduzido do número de parcelas. Quando era deduzido
+  // (parcelas > 1 ? "parcelado" : "unica"), apagar o "2" pra digitar "48" zerava a
+  // conta por um instante e a tela pulava sozinha de volta pra "Uma vez", levando o
+  // campo junto — não dava pra digitar nenhum número de dois dígitos.
+  const [modo, setModo] = useState(
+    futuro?.recorrente ? "mensal" : Number(futuro?.parcelasTotal) > 1 ? "parcelado" : "unica"
+  );
+  const trocarModo = (novo) => {
+    setModo(novo);
+    setForm((f) => ({
+      ...f,
       recorrente: novo === "mensal",
-      parcelas: novo === "parcelado" ? Math.max(2, Number(form.parcelas) || 2) : 1,
-      pago: novo === "unica" ? form.pago : false,
-    });
+      parcelas: novo === "parcelado" ? (Number(f.parcelas) > 1 ? f.parcelas : 2) : 1,
+      pago: novo === "unica" ? f.pago : false,
+    }));
+  };
 
   const nParcelas = Math.max(1, Number(form.parcelas) || 1);
   const valorNum = Number(form.valor) || 0;
@@ -3670,7 +3679,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
         ? motos.map((m) => ({ ...comNome, id: uid(), motoId: m.id }))
         : [comNome];
 
-    const deveParcelar = nParcelas > 1 && !form.recorrente && !jaEhParcela;
+    const deveParcelar = modo === "parcelado" && nParcelas > 1 && !jaEhParcela;
     onSave(deveParcelar ? alvos.flatMap(gerarParcelas) : alvos);
   };
 
@@ -3747,7 +3756,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
             min="2"
             style={inputStyle}
             value={form.parcelas}
-            onChange={(e) => setForm({ ...form, parcelas: Math.max(1, Number(e.target.value) || 1) })}
+            onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
             disabled={jaEhParcela}
           />
           <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
@@ -3838,6 +3847,7 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
   const [verTodosFixos, setVerTodosFixos] = useState(false);
   const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
+  const [grupoAberto, setGrupoAberto] = useState(null);
   // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
   // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
   useImperativeHandle(ref, () => ({ abrirNovo: () => setModal(emptyFuturo()) }));
@@ -3887,7 +3897,93 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     return [...porDia.entries()].sort((a, b) => a[0] - b[0]);
   })();
 
-  const FuturoRow = ({ f }) => {
+  // Junta numa linha só o que é "a mesma conta repetida", pra lista não virar um
+  // paredão: as parcelas de um mesmo carnê (um financiamento em 48x virava 48 linhas)
+  // e a mesma conta aplicada a várias motos (rastreador, seguro — vira uma conta por
+  // moto no banco). Clicar na linha abre e mostra o que tem dentro.
+  //
+  // Contas já cadastradas não têm o campo de grupo, então o agrupamento por moto usa o
+  // CONTEÚDO (nome + tipo + valor + dia) como chave — assim o que já está no banco
+  // aparece agrupado sem precisar recadastrar nada.
+  const agrupar = (lista) => {
+    const grupos = new Map();
+    lista.forEach((f) => {
+      const dia = f.diaVencimento || (f.vencimento ? f.vencimento.slice(8, 10) : "");
+      const chave = f.grupoParcelas
+        ? `parc:${f.grupoParcelas}`
+        : f.motoId
+        ? `moto:${nomeDoFuturo(f)}|${f.tipo}|${Number(f.valor) || 0}|${f.recorrente ? 1 : 0}|${dia}`
+        : `uni:${f.id}`;
+      if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
+      grupos.get(chave).itens.push(f);
+    });
+    return [...grupos.values()];
+  };
+
+  const gruposFixos = agrupar(recorrentes);
+  const gruposAvulsos = agrupar(avulsos);
+
+  const GrupoRow = ({ grupo }) => {
+    const itens = grupo.itens;
+    const primeiro = itens[0];
+    const aberto = grupoAberto === grupo.chave;
+    const ehParcelado = grupo.chave.startsWith("parc:");
+    const total = itens.reduce((s, f) => s + (Number(f.valor) || 0), 0);
+    const pendentes = itens.filter((f) => !f.pago);
+    const proxima = [...pendentes].sort((a, b) => (a.vencimento > b.vencimento ? 1 : -1))[0];
+    const totalParcelas = primeiro.parcelasTotal || itens.length;
+
+    return (
+      <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+        <div
+          onClick={() => setGrupoAberto(aberto ? null : grupo.chave)}
+          className="flex items-center justify-between cursor-pointer"
+          style={{ padding: "13px 18px" }}
+        >
+          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
+            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}>
+              {primeiro.tipo === "entrada" ? <TrendingUp size={15} color="var(--rd-positive)" /> : <TrendingDown size={15} color="var(--rd-negative)" />}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
+                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>{nomeDoFuturo(primeiro)}</span>
+                <span
+                  style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface-2)", color: "var(--rd-text-dim)", flex: "none" }}
+                >
+                  {ehParcelado ? `${totalParcelas} parcelas` : `${itens.length} motos`}
+                </span>
+              </div>
+              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
+                {ehParcelado
+                  ? `${formatCurrency(primeiro.valor)} por mês · faltam ${pendentes.length} de ${totalParcelas}${
+                      proxima ? ` · próxima em ${formatDate(proxima.vencimento)}` : ""
+                    }`
+                  : primeiro.recorrente
+                  ? `Todo mês · dia ${primeiro.diaVencimento || (primeiro.vencimento ? new Date(`${primeiro.vencimento}T00:00:00`).getDate() : "?")} · ${formatCurrency(primeiro.valor)} por moto`
+                  : `Vence em ${formatDate(primeiro.vencimento)} · ${formatCurrency(primeiro.valor)} por moto`}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center flex-shrink-0" style={{ gap: 6 }}>
+            <span style={{ color: primeiro.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)", fontWeight: 700, fontSize: 15 }}>
+              {primeiro.tipo === "entrada" ? "+ " : "\u2212 "}
+              {formatCurrency(total)}
+            </span>
+            {aberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />}
+          </div>
+        </div>
+        <Collapse open={aberto}>
+          <div className="flex flex-col px-3 pb-3" style={{ gap: 8 }}>
+            {itens.map((f) => (
+              <FuturoRow key={f.id} f={f} dentroDeGrupo />
+            ))}
+          </div>
+        </Collapse>
+      </div>
+    );
+  };
+
+  const FuturoRow = ({ f, dentroDeGrupo }) => {
     const motoLigada = motos?.find((m) => m.id === f.motoId);
     const diaDoMes = f.diaVencimento || (f.vencimento ? new Date(`${f.vencimento}T00:00:00`).getDate() : null);
     // fixa mensal não tem "pago" (ela se repete pra sempre) — o que existe é confirmar ou
@@ -3898,7 +3994,12 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
       key={f.id}
       onClick={() => permissoes.podeEditar && setModal(f)}
       className={`flex items-center justify-between rounded-2xl${permissoes.podeEditar ? " cursor-pointer" : ""}`}
-      style={{ padding: "13px 18px", background: "var(--rd-surface)", border: "1px solid var(--rd-border)", opacity: jaConfirmadoEsteMes ? 0.55 : 1 }}
+      style={{
+        padding: "13px 18px",
+        background: dentroDeGrupo ? "var(--rd-surface-2)" : "var(--rd-surface)",
+        border: `1px solid ${dentroDeGrupo ? "transparent" : "var(--rd-border)"}`,
+        opacity: jaConfirmadoEsteMes ? 0.55 : 1,
+      }}
     >
       <div className="flex items-center min-w-0" style={{ gap: 12 }}>
         <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}>
@@ -4077,42 +4178,42 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
 
       {recorrentes.length > 0 && (
         <div className="flex flex-col" style={{ gap: 10 }}>
-          <span style={RD_LABEL}>Fixos mensais</span>
+          <span style={RD_LABEL}>Todo mês</span>
           <div className="flex flex-col" style={{ gap: 8 }}>
-            {(verTodosFixos ? recorrentes : recorrentes.slice(0, 4)).map((f) => (
-              <FuturoRow key={f.id} f={f} />
-            ))}
+            {(verTodosFixos ? gruposFixos : gruposFixos.slice(0, 4)).map((g) =>
+              g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
+            )}
           </div>
-          {recorrentes.length > 4 && (
+          {gruposFixos.length > 4 && (
             <button
               onClick={() => setVerTodosFixos((v) => !v)}
               style={{ color: "var(--rd-brand-light)", fontSize: 12.5, fontWeight: 700, minHeight: 32, background: "none", alignSelf: "flex-start" }}
             >
-              {verTodosFixos ? "Ver menos" : `Ver mais (${recorrentes.length - 4})`}
+              {verTodosFixos ? "Ver menos" : `Ver mais (${gruposFixos.length - 4})`}
             </button>
           )}
         </div>
       )}
 
       <div className="flex flex-col" style={{ gap: 10 }}>
-        <span style={RD_LABEL}>Avulsos</span>
-        {avulsos.length === 0 ? (
+        <span style={RD_LABEL}>Com data marcada</span>
+        {gruposAvulsos.length === 0 ? (
           <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: "1px solid var(--rd-border)" }}>
-            Nenhuma conta avulsa cadastrada.
+            Nenhuma conta com data marcada.
           </div>
         ) : (
           <>
             <div className="flex flex-col" style={{ gap: 8 }}>
-              {(verTodosAvulsos ? avulsos : avulsos.slice(0, 4)).map((f) => (
-                <FuturoRow key={f.id} f={f} />
-              ))}
+              {(verTodosAvulsos ? gruposAvulsos : gruposAvulsos.slice(0, 4)).map((g) =>
+                g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
+              )}
             </div>
-            {avulsos.length > 4 && (
+            {gruposAvulsos.length > 4 && (
               <button
                 onClick={() => setVerTodosAvulsos((v) => !v)}
                 style={{ color: "var(--rd-brand-light)", fontSize: 12.5, fontWeight: 700, minHeight: 32, background: "none", alignSelf: "flex-start" }}
               >
-                {verTodosAvulsos ? "Ver menos" : `Ver mais (${avulsos.length - 4})`}
+                {verTodosAvulsos ? "Ver menos" : `Ver mais (${gruposAvulsos.length - 4})`}
               </button>
             )}
           </>
