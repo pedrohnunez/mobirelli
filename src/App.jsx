@@ -4196,10 +4196,10 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
       )}
 
       <div className="flex flex-col" style={{ gap: 10 }}>
-        <span style={RD_LABEL}>Com data marcada</span>
+        <span style={RD_LABEL}>Parcelamentos</span>
         {gruposAvulsos.length === 0 ? (
           <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: "1px solid var(--rd-border)" }}>
-            Nenhuma conta com data marcada.
+            Nenhum parcelamento ou conta com data marcada.
           </div>
         ) : (
           <>
@@ -4335,7 +4335,10 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       mesAtualKey,
       ...Object.keys(porMes),
       ...(futuros || []).filter((f) => !f.recorrente && !f.pago && f.vencimento).map((f) => f.vencimento.slice(0, 7)),
-    ].filter((k) => k !== "sem-data")
+      // nada DEPOIS do mês corrente: uma conta parcelada em 48x criava aba de mês até
+      // 2030 aqui dentro. Parcela que ainda vai vencer é assunto da aba Futuros; em
+      // "Lançado" ela só aparece quando o mês dela chegar
+    ].filter((k) => k !== "sem-data" && k <= mesAtualKey)
   );
   const pendenciasPorMes = {};
   mesesCandidatosPendencia.forEach((mesKey) => {
@@ -4395,8 +4398,213 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     setDetalheAberto(null);
   };
 
-  const [expandido, setExpandido] = useState(mesesOrdenados[0] || null);
+  // Abre no mês CORRENTE (ou no mês mais recente que tenha lançamento de verdade).
+  // Antes abria em mesesOrdenados[0], que é o mês mais DISTANTE da lista — bastava uma
+  // conta parcelada em 48x pra tela abrir em 2030, num mês vazio, parecendo que os
+  // lançamentos tinham sumido.
+  const mesInicial =
+    mesesOrdenados.find((m) => m === mesAtualKey) ||
+    mesesComLancamentos.find((m) => m <= mesAtualKey) ||
+    mesesOrdenados[0] ||
+    null;
+  const [expandido, setExpandido] = useState(mesInicial);
   const [detalheAberto, setDetalheAberto] = useState(null);
+  const [grupoLancAberto, setGrupoLancAberto] = useState(null);
+
+  // Uma linha de lançamento. Virou componente pra poder aparecer tanto solta quanto
+  // dentro de um grupo de lançamentos de mesmo nome (ex.: o rastreador lançado pra 11
+  // motos no mesmo mês, que antes eram 11 linhas iguais seguidas).
+  const LinhaLancamento = ({ l, ultimo }) => {
+                    const motoLigada = motos?.find((m) => m.id === l.motoId);
+                    const detalheEsteAberto = detalheAberto === l.id;
+                    const temDetalhe = !!(l.natureza || l.forma || l.descricao);
+                    const pendente = !!l._pendente;
+                    const corItem = pendente ? "var(--rd-attention)" : l.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)";
+                    return (
+                      <div
+                        key={l.id}
+                        style={{
+                          background: pendente ? "var(--rd-attention-bg)" : "var(--rd-surface-2)",
+                          borderBottom: ultimo ? "none" : "1px solid var(--rd-row-border)",
+                        }}
+                      >
+                        <div onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)} className="flex items-center justify-between cursor-pointer" style={{ padding: "13px 18px" }}>
+                          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
+                            <div
+                              className="flex items-center justify-center flex-shrink-0"
+                              style={{ width: 30, height: 30, borderRadius: 9, background: pendente ? "#2A2115" : "var(--rd-surface)" }}
+                            >
+                              {pendente ? (
+                                <Clock size={15} color="var(--rd-attention)" />
+                              ) : l.tipo === "entrada" ? (
+                                <TrendingUp size={15} color="var(--rd-positive)" />
+                              ) : (
+                                <TrendingDown size={15} color="var(--rd-negative)" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
+                                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>
+                                  {l.categoria || "Sem categoria"}
+                                </span>
+                                {l.parcelasTotal > 1 && (
+                                  <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface)", color: "var(--rd-text-dim)" }}>
+                                    Parcela {l.parcelaAtual || 1}/{l.parcelasTotal}
+                                  </span>
+                                )}
+                                {pendente && (
+                                  <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "#2A2115", color: "var(--rd-attention)" }}>
+                                    Previsto
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
+                                {formatDate(l.data)}
+                                {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
+                                {pendente && l.recorrente && " · fixo mensal"}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center flex-shrink-0" style={{ gap: 2 }}>
+                            <span style={{ color: corItem, fontWeight: 700, fontSize: 15 }}>
+                              {l.tipo === "entrada" ? "+ " : "− "}
+                              {formatCurrency(l.valor)}
+                            </span>
+                            {(temDetalhe || pendente || permissoes.podeEditar) &&
+                              (detalheEsteAberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />)}
+                            {!pendente && permissoes.podeEditar && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  excluir(l.id);
+                                }}
+                                className="mbr-hover-grow flex items-center justify-center"
+                                style={{ color: "var(--rd-text-dim)", width: 34, height: 34, marginRight: -8 }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {pendente ? (
+                          <Collapse open={detalheEsteAberto}>
+                            <div className="flex flex-col" style={{ gap: 10, padding: "10px 18px 14px", borderTop: "1px solid var(--rd-row-border)" }}>
+                              <div style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                                Ainda não {l.tipo === "entrada" ? "recebido" : "pago"} — essa conta está cadastrada em "Futuros" e ainda não virou um lançamento real.
+                              </div>
+                              {permissoes.podeEditar && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    confirmarFuturo(l);
+                                  }}
+                                  className="flex items-center justify-center"
+                                  style={{ gap: 7, borderRadius: 12, padding: "9px 0", fontWeight: 700, fontSize: 13, background: "var(--rd-brand-soft)", color: "var(--rd-shell)" }}
+                                >
+                                  <CheckCircle2 size={14} /> Confirmar {l.tipo === "entrada" ? "recebimento" : "pagamento"}
+                                </button>
+                              )}
+                            </div>
+                          </Collapse>
+                        ) : (
+                          <Collapse open={detalheEsteAberto}>
+                            <div className="flex flex-col" style={{ gap: 7, padding: "10px 18px 14px", borderTop: "1px solid var(--rd-row-border)" }}>
+                              {l.natureza && (
+                                <div className="flex items-center justify-between" style={{ fontSize: 12 }}>
+                                  <span style={{ color: "var(--rd-text-faint)" }}>Natureza</span>
+                                  <span style={{ color: "var(--rd-text-muted)" }}>{l.natureza}</span>
+                                </div>
+                              )}
+                              {l.forma && (
+                                <div className="flex items-center justify-between" style={{ fontSize: 12 }}>
+                                  <span style={{ color: "var(--rd-text-faint)" }}>Forma de pagamento</span>
+                                  <span style={{ color: "var(--rd-text-muted)" }}>{l.forma}</span>
+                                </div>
+                              )}
+                              {l.descricao && (
+                                <div className="flex items-center justify-between" style={{ gap: 12, fontSize: 12 }}>
+                                  <span style={{ color: "var(--rd-text-faint)", flexShrink: 0 }}>Detalhe</span>
+                                  <span style={{ color: "var(--rd-text-muted)", textAlign: "right" }}>{l.descricao}</span>
+                                </div>
+                              )}
+                              {permissoes.podeEditar && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setModal(l);
+                                  }}
+                                  className="flex items-center"
+                                  style={{ gap: 5, color: "var(--rd-brand-light)", fontSize: 12, fontWeight: 700, minHeight: 32, marginTop: 2, background: "none" }}
+                                >
+                                  <Pencil size={12} /> Editar
+                                </button>
+                              )}
+                            </div>
+                          </Collapse>
+                        )}
+                      </div>
+                    );
+  };
+
+  const agruparLancamentos = (lista) => {
+    const grupos = new Map();
+    lista.forEach((l) => {
+      const chave = `${(l.categoria || "").trim().toLowerCase()}|${l.tipo}|${l._pendente ? 1 : 0}`;
+      if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
+      grupos.get(chave).itens.push(l);
+    });
+    return [...grupos.values()];
+  };
+
+  const GrupoLancamentos = ({ grupo, ultimo }) => {
+    const itens = grupo.itens;
+    const primeiro = itens[0];
+    const aberto = grupoLancAberto === grupo.chave;
+    const total = itens.reduce((s, l) => s + (Number(l.valor) || 0), 0);
+    const pendente = !!primeiro._pendente;
+    const cor = pendente ? "var(--rd-attention)" : primeiro.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)";
+    return (
+      <div style={{ borderBottom: ultimo ? "none" : "1px solid var(--rd-row-border)", background: pendente ? "var(--rd-attention-bg)" : "var(--rd-surface-2)" }}>
+        <div
+          onClick={() => setGrupoLancAberto(aberto ? null : grupo.chave)}
+          className="flex items-center justify-between cursor-pointer"
+          style={{ padding: "13px 18px" }}
+        >
+          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
+            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface)" }}>
+              {primeiro.tipo === "entrada" ? <TrendingUp size={15} color="var(--rd-positive)" /> : <TrendingDown size={15} color="var(--rd-negative)" />}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
+                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>{primeiro.categoria || "Sem categoria"}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface)", color: "var(--rd-text-dim)", flex: "none" }}>
+                  {itens.length}x
+                </span>
+              </div>
+              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
+                {itens.length} lançamentos iguais neste mês
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center flex-shrink-0" style={{ gap: 4 }}>
+            <span style={{ color: cor, fontWeight: 700, fontSize: 15 }}>
+              {primeiro.tipo === "entrada" ? "+ " : "\u2212 "}
+              {formatCurrency(total)}
+            </span>
+            {aberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />}
+          </div>
+        </div>
+        <Collapse open={aberto}>
+          <div style={{ borderTop: "1px solid var(--rd-row-border)" }}>
+            {itens.map((l, i) => (
+              <LinhaLancamento key={l.id} l={l} ultimo={i === itens.length - 1} />
+            ))}
+          </div>
+        </Collapse>
+      </div>
+    );
+  };
+
   const [verTodosResumo, setVerTodosResumo] = useState(false);
   const [view, setView] = useState("lancado");
   const futurosViewRef = useRef(null);
@@ -4592,138 +4800,14 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
               </button>
 
               <Collapse open={aberto}>
-                <div style={{ borderTop: "1px solid var(--rd-border-soft)" }}>
-                  {itens.map((l, i) => {
-                    const motoLigada = motos?.find((m) => m.id === l.motoId);
-                    const detalheEsteAberto = detalheAberto === l.id;
-                    const temDetalhe = !!(l.natureza || l.forma || l.descricao);
-                    const pendente = !!l._pendente;
-                    const corItem = pendente ? "var(--rd-attention)" : l.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)";
-                    return (
-                      <div
-                        key={l.id}
-                        style={{
-                          background: pendente ? "var(--rd-attention-bg)" : "var(--rd-surface-2)",
-                          borderBottom: i < itens.length - 1 ? "1px solid var(--rd-row-border)" : "none",
-                        }}
-                      >
-                        <div onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)} className="flex items-center justify-between cursor-pointer" style={{ padding: "13px 18px" }}>
-                          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
-                            <div
-                              className="flex items-center justify-center flex-shrink-0"
-                              style={{ width: 30, height: 30, borderRadius: 9, background: pendente ? "#2A2115" : "var(--rd-surface)" }}
-                            >
-                              {pendente ? (
-                                <Clock size={15} color="var(--rd-attention)" />
-                              ) : l.tipo === "entrada" ? (
-                                <TrendingUp size={15} color="var(--rd-positive)" />
-                              ) : (
-                                <TrendingDown size={15} color="var(--rd-negative)" />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
-                                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>
-                                  {l.categoria || "Sem categoria"}
-                                </span>
-                                {l.parcelasTotal > 1 && (
-                                  <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface)", color: "var(--rd-text-dim)" }}>
-                                    Parcela {l.parcelaAtual || 1}/{l.parcelasTotal}
-                                  </span>
-                                )}
-                                {pendente && (
-                                  <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "#2A2115", color: "var(--rd-attention)" }}>
-                                    Previsto
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
-                                {formatDate(l.data)}
-                                {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
-                                {pendente && l.recorrente && " · fixo mensal"}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center flex-shrink-0" style={{ gap: 2 }}>
-                            <span style={{ color: corItem, fontWeight: 700, fontSize: 15 }}>
-                              {l.tipo === "entrada" ? "+ " : "− "}
-                              {formatCurrency(l.valor)}
-                            </span>
-                            {(temDetalhe || pendente || permissoes.podeEditar) &&
-                              (detalheEsteAberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />)}
-                            {!pendente && permissoes.podeEditar && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  excluir(l.id);
-                                }}
-                                className="mbr-hover-grow flex items-center justify-center"
-                                style={{ color: "var(--rd-text-dim)", width: 34, height: 34, marginRight: -8 }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        {pendente ? (
-                          <Collapse open={detalheEsteAberto}>
-                            <div className="flex flex-col" style={{ gap: 10, padding: "10px 18px 14px", borderTop: "1px solid var(--rd-row-border)" }}>
-                              <div style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
-                                Ainda não {l.tipo === "entrada" ? "recebido" : "pago"} — essa conta está cadastrada em "Futuros" e ainda não virou um lançamento real.
-                              </div>
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    confirmarFuturo(l);
-                                  }}
-                                  className="flex items-center justify-center"
-                                  style={{ gap: 7, borderRadius: 12, padding: "9px 0", fontWeight: 700, fontSize: 13, background: "var(--rd-brand-soft)", color: "var(--rd-shell)" }}
-                                >
-                                  <CheckCircle2 size={14} /> Confirmar {l.tipo === "entrada" ? "recebimento" : "pagamento"}
-                                </button>
-                              )}
-                            </div>
-                          </Collapse>
-                        ) : (
-                          <Collapse open={detalheEsteAberto}>
-                            <div className="flex flex-col" style={{ gap: 7, padding: "10px 18px 14px", borderTop: "1px solid var(--rd-row-border)" }}>
-                              {l.natureza && (
-                                <div className="flex items-center justify-between" style={{ fontSize: 12 }}>
-                                  <span style={{ color: "var(--rd-text-faint)" }}>Natureza</span>
-                                  <span style={{ color: "var(--rd-text-muted)" }}>{l.natureza}</span>
-                                </div>
-                              )}
-                              {l.forma && (
-                                <div className="flex items-center justify-between" style={{ fontSize: 12 }}>
-                                  <span style={{ color: "var(--rd-text-faint)" }}>Forma de pagamento</span>
-                                  <span style={{ color: "var(--rd-text-muted)" }}>{l.forma}</span>
-                                </div>
-                              )}
-                              {l.descricao && (
-                                <div className="flex items-center justify-between" style={{ gap: 12, fontSize: 12 }}>
-                                  <span style={{ color: "var(--rd-text-faint)", flexShrink: 0 }}>Detalhe</span>
-                                  <span style={{ color: "var(--rd-text-muted)", textAlign: "right" }}>{l.descricao}</span>
-                                </div>
-                              )}
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setModal(l);
-                                  }}
-                                  className="flex items-center"
-                                  style={{ gap: 5, color: "var(--rd-brand-light)", fontSize: 12, fontWeight: 700, minHeight: 32, marginTop: 2, background: "none" }}
-                                >
-                                  <Pencil size={12} /> Editar
-                                </button>
-                              )}
-                            </div>
-                          </Collapse>
-                        )}
-                      </div>
-                    );
-                  })}
+                <div style={{ borderTop: `1px solid ${theme.divider}` }}>
+                  {agruparLancamentos(itens).map((g, gi, arr) =>
+                    g.itens.length === 1 ? (
+                      <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
+                    ) : (
+                      <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
+                    )
+                  )}
                 </div>
               </Collapse>
             </div>
