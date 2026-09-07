@@ -3906,11 +3906,11 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
 
       <div>
         <div className="text-xs uppercase tracking-wide mb-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Com data marcada
+          Parcelamentos
         </div>
         {gruposAvulsos.length === 0 ? (
           <div className="rounded-2xl p-6 text-center" style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT, border: `1px solid ${theme.cardBorder}` }}>
-            Nenhuma conta com data marcada.
+            Nenhum parcelamento ou conta com data marcada.
           </div>
         ) : (
           <>
@@ -4047,7 +4047,10 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       mesAtualKey,
       ...Object.keys(porMes),
       ...(futuros || []).filter((f) => !f.recorrente && !f.pago && f.vencimento).map((f) => f.vencimento.slice(0, 7)),
-    ].filter((k) => k !== "sem-data")
+      // nada DEPOIS do mês corrente: uma conta parcelada em 48x criava aba de mês até
+      // 2030 aqui dentro. Parcela que ainda vai vencer é assunto da aba Futuros; em
+      // "Lançado" ela só aparece quando o mês dela chegar
+    ].filter((k) => k !== "sem-data" && k <= mesAtualKey)
   );
   const pendenciasPorMes = {};
   mesesCandidatosPendencia.forEach((mesKey) => {
@@ -4107,8 +4110,222 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     setDetalheAberto(null);
   };
 
-  const [expandido, setExpandido] = useState(mesesOrdenados[0] || null);
+  // Abre no mês CORRENTE (ou no mês mais recente que tenha lançamento de verdade).
+  // Antes abria em mesesOrdenados[0], que é o mês mais DISTANTE da lista — bastava uma
+  // conta parcelada em 48x pra tela abrir em 2030, num mês vazio, parecendo que os
+  // lançamentos tinham sumido.
+  const mesInicial =
+    mesesOrdenados.find((m) => m === mesAtualKey) ||
+    mesesComLancamentos.find((m) => m <= mesAtualKey) ||
+    mesesOrdenados[0] ||
+    null;
+  const [expandido, setExpandido] = useState(mesInicial);
   const [detalheAberto, setDetalheAberto] = useState(null);
+  const [grupoLancAberto, setGrupoLancAberto] = useState(null);
+
+  // Uma linha de lançamento. Virou componente pra poder aparecer tanto solta quanto
+  // dentro de um grupo de lançamentos de mesmo nome (ex.: o rastreador lançado pra 11
+  // motos no mesmo mês, que antes eram 11 linhas iguais seguidas).
+  const LinhaLancamento = ({ l, ultimo }) => {
+                    const motoLigada = motos?.find((m) => m.id === l.motoId);
+                    const detalheEsteAberto = detalheAberto === l.id;
+                    const temDetalhe = !!(l.natureza || l.forma || l.descricao);
+                    const pendente = !!l._pendente;
+                    const corItem = pendente ? theme.amber : l.tipo === "entrada" ? theme.mint : theme.coral;
+                    return (
+                      <div
+                        key={l.id}
+                        style={{
+                          background: pendente ? `${theme.amber}14` : theme.card2,
+                          borderBottom: ultimo ? "none" : `1px solid ${theme.divider}`,
+                        }}
+                      >
+                        <div
+                          onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)}
+                          className="flex items-center justify-between px-4 py-3 cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div
+                              className="flex items-center justify-center flex-shrink-0"
+                              style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}
+                            >
+                              {pendente ? (
+                                <Clock size={16} color={theme.amber} />
+                              ) : l.tipo === "entrada" ? (
+                                <TrendingUp size={16} color={theme.mint} />
+                              ) : (
+                                <TrendingDown size={16} color={theme.coral} />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }}>{l.categoria || "Sem categoria"}</span>
+                                {l.parcelasTotal > 1 && (
+                                  <span
+                                    className="text-xs font-semibold rounded-full px-2"
+                                    style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT }}
+                                  >
+                                    Parcela {l.parcelaAtual || 1}/{l.parcelasTotal}
+                                  </span>
+                                )}
+                                {pendente && (
+                                  <span
+                                    className="text-xs font-semibold rounded-full px-2"
+                                    style={{ background: `${theme.amber}26`, color: theme.amber, fontFamily: BODY_FONT }}
+                                  >
+                                    Previsto
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ color: theme.textFaint, fontFamily: BODY_FONT, fontSize: 12 }}>
+                                {formatDate(l.data)}
+                                {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
+                                {pendente && l.recorrente && " · fixo mensal"}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <span style={{ color: corItem, fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 16 }}>
+                              {l.tipo === "entrada" ? "+" : "-"} {formatCurrency(l.valor)}
+                            </span>
+                            {(temDetalhe || pendente || permissoes.podeEditar) &&
+                              (detalheEsteAberto ? <ChevronUp size={16} color={theme.textMuted} /> : <ChevronDown size={16} color={theme.textMuted} />)}
+                            {!pendente && permissoes.podeEditar && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  excluir(l.id);
+                                }}
+                                className="mbr-hover-grow flex items-center justify-center"
+                                style={{ color: theme.textMuted, width: 36, height: 36, marginRight: -8 }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {pendente ? (
+                          <Collapse open={detalheEsteAberto}>
+                            <div className="px-4 pb-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${theme.divider}`, paddingTop: 10 }}>
+                              <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                                Ainda não {l.tipo === "entrada" ? "recebido" : "pago"} — essa conta está cadastrada em
+                                "Futuros" e ainda não virou um lançamento real.
+                              </div>
+                              {permissoes.podeEditar && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    confirmarFuturo(l);
+                                  }}
+                                  className="flex items-center justify-center gap-1.5 rounded-xl py-2 font-semibold text-sm"
+                                  style={{ background: theme.mint, color: theme.mintText }}
+                                >
+                                  <CheckCircle2 size={14} /> Confirmar {l.tipo === "entrada" ? "recebimento" : "pagamento"}
+                                </button>
+                              )}
+                            </div>
+                          </Collapse>
+                        ) : (
+                        <Collapse open={detalheEsteAberto}>
+                          <div className="px-4 pb-3 flex flex-col gap-1.5" style={{ borderTop: `1px solid ${theme.divider}`, paddingTop: 10 }}>
+                            {l.natureza && (
+                              <div className="flex items-center justify-between text-xs" style={{ fontFamily: BODY_FONT }}>
+                                <span style={{ color: theme.textFaint }}>Natureza</span>
+                                <span style={{ color: theme.textMuted }}>{l.natureza}</span>
+                              </div>
+                            )}
+                            {l.forma && (
+                              <div className="flex items-center justify-between text-xs" style={{ fontFamily: BODY_FONT }}>
+                                <span style={{ color: theme.textFaint }}>Forma de pagamento</span>
+                                <span style={{ color: theme.textMuted }}>{l.forma}</span>
+                              </div>
+                            )}
+                            {l.descricao && (
+                              <div className="flex items-center justify-between gap-3 text-xs" style={{ fontFamily: BODY_FONT }}>
+                                <span style={{ color: theme.textFaint, flexShrink: 0 }}>Detalhe</span>
+                                <span style={{ color: theme.textMuted, textAlign: "right" }}>{l.descricao}</span>
+                              </div>
+                            )}
+                            {permissoes.podeEditar && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setModal(l);
+                                }}
+                                className="text-xs font-semibold flex items-center gap-1 mt-1"
+                                style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
+                              >
+                                <Pencil size={12} /> Editar
+                              </button>
+                            )}
+                          </div>
+                        </Collapse>
+                        )}
+                      </div>
+                    );
+  };
+
+  // agrupa, DENTRO do mês, os lançamentos que têm o mesmo nome (e mesmo tipo) — nada de
+  // agrupar por mês ou ano, só nome igual com nome igual
+  const agruparLancamentos = (lista) => {
+    const grupos = new Map();
+    lista.forEach((l) => {
+      const chave = `${(l.categoria || "").trim().toLowerCase()}|${l.tipo}|${l._pendente ? 1 : 0}`;
+      if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
+      grupos.get(chave).itens.push(l);
+    });
+    return [...grupos.values()];
+  };
+
+  const GrupoLancamentos = ({ grupo, ultimo }) => {
+    const itens = grupo.itens;
+    const primeiro = itens[0];
+    const aberto = grupoLancAberto === grupo.chave;
+    const total = itens.reduce((s, l) => s + (Number(l.valor) || 0), 0);
+    const pendente = !!primeiro._pendente;
+    const cor = pendente ? theme.amber : primeiro.tipo === "entrada" ? theme.mint : theme.coral;
+    return (
+      <div style={{ borderBottom: ultimo ? "none" : `1px solid ${theme.divider}`, background: pendente ? theme.card2 : "transparent" }}>
+        <div
+          onClick={() => setGrupoLancAberto(aberto ? null : grupo.chave)}
+          className="flex items-center justify-between cursor-pointer"
+          style={{ padding: "13px 18px" }}
+        >
+          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
+            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: theme.card2 }}>
+              {primeiro.tipo === "entrada" ? <TrendingUp size={15} color={theme.mint} /> : <TrendingDown size={15} color={theme.coral} />}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
+                <span style={{ color: theme.text, fontWeight: 600, fontSize: 13.5 }}>{primeiro.categoria || "Sem categoria"}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: theme.card2, color: theme.textMuted }}>
+                  {itens.length}x
+                </span>
+              </div>
+              <div style={{ color: theme.textMuted, fontSize: 11.5 }}>
+                {itens.length} lançamentos iguais neste mês
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center flex-shrink-0" style={{ gap: 4 }}>
+            <span style={{ color: cor, fontWeight: 700, fontSize: 15 }}>
+              {primeiro.tipo === "entrada" ? "+ " : "\u2212 "}
+              {formatCurrency(total)}
+            </span>
+            {aberto ? <ChevronUp size={16} color={theme.textMuted} /> : <ChevronDown size={16} color={theme.textMuted} />}
+          </div>
+        </div>
+        <Collapse open={aberto}>
+          <div style={{ borderTop: `1px solid ${theme.divider}` }}>
+            {itens.map((l, i) => (
+              <LinhaLancamento key={l.id} l={l} ultimo={i === itens.length - 1} />
+            ))}
+          </div>
+        </Collapse>
+      </div>
+    );
+  };
+
   const [verTodosResumo, setVerTodosResumo] = useState(false);
   const [view, setView] = useState("lancado");
   const futurosViewRef = useRef(null);
@@ -4306,144 +4523,13 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
 
               <Collapse open={aberto}>
                 <div style={{ borderTop: `1px solid ${theme.divider}` }}>
-                  {itens.map((l, i) => {
-                    const motoLigada = motos?.find((m) => m.id === l.motoId);
-                    const detalheEsteAberto = detalheAberto === l.id;
-                    const temDetalhe = !!(l.natureza || l.forma || l.descricao);
-                    const pendente = !!l._pendente;
-                    const corItem = pendente ? theme.amber : l.tipo === "entrada" ? theme.mint : theme.coral;
-                    return (
-                      <div
-                        key={l.id}
-                        style={{
-                          background: pendente ? `${theme.amber}14` : theme.card2,
-                          borderBottom: i < itens.length - 1 ? `1px solid ${theme.divider}` : "none",
-                        }}
-                      >
-                        <div
-                          onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)}
-                          className="flex items-center justify-between px-4 py-3 cursor-pointer"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div
-                              className="flex items-center justify-center flex-shrink-0"
-                              style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}
-                            >
-                              {pendente ? (
-                                <Clock size={16} color={theme.amber} />
-                              ) : l.tipo === "entrada" ? (
-                                <TrendingUp size={16} color={theme.mint} />
-                              ) : (
-                                <TrendingDown size={16} color={theme.coral} />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }}>{l.categoria || "Sem categoria"}</span>
-                                {l.parcelasTotal > 1 && (
-                                  <span
-                                    className="text-xs font-semibold rounded-full px-2"
-                                    style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT }}
-                                  >
-                                    Parcela {l.parcelaAtual || 1}/{l.parcelasTotal}
-                                  </span>
-                                )}
-                                {pendente && (
-                                  <span
-                                    className="text-xs font-semibold rounded-full px-2"
-                                    style={{ background: `${theme.amber}26`, color: theme.amber, fontFamily: BODY_FONT }}
-                                  >
-                                    Previsto
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ color: theme.textFaint, fontFamily: BODY_FONT, fontSize: 12 }}>
-                                {formatDate(l.data)}
-                                {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
-                                {pendente && l.recorrente && " · fixo mensal"}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <span style={{ color: corItem, fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 16 }}>
-                              {l.tipo === "entrada" ? "+" : "-"} {formatCurrency(l.valor)}
-                            </span>
-                            {(temDetalhe || pendente || permissoes.podeEditar) &&
-                              (detalheEsteAberto ? <ChevronUp size={16} color={theme.textMuted} /> : <ChevronDown size={16} color={theme.textMuted} />)}
-                            {!pendente && permissoes.podeEditar && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  excluir(l.id);
-                                }}
-                                className="mbr-hover-grow flex items-center justify-center"
-                                style={{ color: theme.textMuted, width: 36, height: 36, marginRight: -8 }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        {pendente ? (
-                          <Collapse open={detalheEsteAberto}>
-                            <div className="px-4 pb-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${theme.divider}`, paddingTop: 10 }}>
-                              <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                                Ainda não {l.tipo === "entrada" ? "recebido" : "pago"} — essa conta está cadastrada em
-                                "Futuros" e ainda não virou um lançamento real.
-                              </div>
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    confirmarFuturo(l);
-                                  }}
-                                  className="flex items-center justify-center gap-1.5 rounded-xl py-2 font-semibold text-sm"
-                                  style={{ background: theme.mint, color: theme.mintText }}
-                                >
-                                  <CheckCircle2 size={14} /> Confirmar {l.tipo === "entrada" ? "recebimento" : "pagamento"}
-                                </button>
-                              )}
-                            </div>
-                          </Collapse>
-                        ) : (
-                        <Collapse open={detalheEsteAberto}>
-                          <div className="px-4 pb-3 flex flex-col gap-1.5" style={{ borderTop: `1px solid ${theme.divider}`, paddingTop: 10 }}>
-                            {l.natureza && (
-                              <div className="flex items-center justify-between text-xs" style={{ fontFamily: BODY_FONT }}>
-                                <span style={{ color: theme.textFaint }}>Natureza</span>
-                                <span style={{ color: theme.textMuted }}>{l.natureza}</span>
-                              </div>
-                            )}
-                            {l.forma && (
-                              <div className="flex items-center justify-between text-xs" style={{ fontFamily: BODY_FONT }}>
-                                <span style={{ color: theme.textFaint }}>Forma de pagamento</span>
-                                <span style={{ color: theme.textMuted }}>{l.forma}</span>
-                              </div>
-                            )}
-                            {l.descricao && (
-                              <div className="flex items-center justify-between gap-3 text-xs" style={{ fontFamily: BODY_FONT }}>
-                                <span style={{ color: theme.textFaint, flexShrink: 0 }}>Detalhe</span>
-                                <span style={{ color: theme.textMuted, textAlign: "right" }}>{l.descricao}</span>
-                              </div>
-                            )}
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setModal(l);
-                                }}
-                                className="text-xs font-semibold flex items-center gap-1 mt-1"
-                                style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
-                              >
-                                <Pencil size={12} /> Editar
-                              </button>
-                            )}
-                          </div>
-                        </Collapse>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {agruparLancamentos(itens).map((g, gi, arr) =>
+                    g.itens.length === 1 ? (
+                      <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
+                    ) : (
+                      <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
+                    )
+                  )}
                 </div>
               </Collapse>
             </div>
