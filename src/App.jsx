@@ -3193,6 +3193,33 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
 
       <FieldLabel>Natureza</FieldLabel>
       <SelectField value={form.natureza} onChange={set("natureza")} options={NATUREZAS.map((n) => ({ value: n, label: n }))} />
+
+      {/* Manutenção é o único caso em que a moto NÃO é opcional: é ela que faz o gasto
+          aparecer na ficha da moto, em "Manutenções". Escondida atrás de "Mais opções",
+          era fácil salvar uma troca de óleo sem moto (ou com a natureza padrão) e depois
+          não achar ela embaixo da moto. Aqui o campo sobe junto com a escolha. */}
+      {form.natureza === "Manutenção" && (motos || []).length > 0 && (
+        <>
+          <FieldLabel>Moto dessa manutenção</FieldLabel>
+          <SelectField
+            value={form.motoId || ""}
+            onChange={(e) => selecionarMoto(e.target.value)}
+            options={[
+              { value: "", label: "Escolha a moto..." },
+              ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+            ]}
+          />
+          <div
+            className="text-xs -mt-2 mb-3"
+            style={{ color: form.motoId ? theme.textMuted : theme.amber, fontFamily: BODY_FONT }}
+          >
+            {form.motoId
+              ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
+              : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."}
+          </div>
+        </>
+      )}
+
       <FieldLabel>Categoria</FieldLabel>
       <input style={inputStyle} value={form.categoria} onChange={set("categoria")} placeholder="Mensalidade, manutenção, combustível..." />
       <Row2>
@@ -3217,7 +3244,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
         </button>
       ) : (
         <>
-          {(motos || []).length > 0 && (
+          {(motos || []).length > 0 && form.natureza !== "Manutenção" && (
             <>
               <FieldLabel>Moto relacionada (opcional)</FieldLabel>
               <SelectField
@@ -4303,7 +4330,17 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                 </span>
               </div>
               <div style={{ color: theme.textMuted, fontSize: 11.5 }}>
-                {itens.length} lançamentos iguais neste mês
+                {/* mostra as placas no resumo: sem isso, três trocas de óleo de motos
+                    diferentes viravam uma linha só e dava a impressão de terem sumido */}
+                {(() => {
+                  const placas = itens
+                    .map((x) => motos?.find((m) => m.id === x.motoId))
+                    .filter(Boolean)
+                    .map((m) => formatPlaca(m.placa));
+                  return placas.length > 0
+                    ? placas.join(" · ")
+                    : `${itens.length} lançamentos iguais neste mês`;
+                })()}
               </div>
             </div>
           </div>
