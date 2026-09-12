@@ -5144,27 +5144,27 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
             className="flex items-center gap-3 rounded-2xl px-4 py-3 w-full"
             style={{
               maxWidth: 460,
-              background: theme.panel,
-              border: `1px solid ${theme.cardBorder}`,
+              background: "var(--rd-surface)",
+              border: "1px solid var(--rd-border)",
               boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
               pointerEvents: "auto",
             }}
           >
-            <div className="flex-1 min-w-0" style={{ fontFamily: BODY_FONT }}>
-              <div className="text-xs" style={{ color: theme.textMuted }}>Excluído</div>
-              <div className="truncate text-xs" style={{ color: theme.text, fontWeight: 600 }}>{desfazer.rotulo}</div>
+            <div className="flex-1 min-w-0">
+              <div style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>Excluído</div>
+              <div className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text)", fontWeight: 700 }}>{desfazer.rotulo}</div>
             </div>
             <button
               onClick={restaurar}
-              className="text-xs font-semibold rounded-xl px-3 py-2 flex-shrink-0"
-              style={{ background: theme.mint, color: theme.mintText, fontFamily: BODY_FONT }}
+              className="rounded-xl px-3 py-2 flex-shrink-0"
+              style={{ background: "var(--rd-brand-soft)", color: "var(--rd-shell)", fontSize: 12.5, fontWeight: 700 }}
             >
               Desfazer
             </button>
             <button
               onClick={() => setDesfazer(null)}
               className="flex items-center justify-center flex-shrink-0"
-              style={{ color: theme.textMuted, width: 32, height: 32, marginRight: -6 }}
+              style={{ color: "var(--rd-text-dim)", width: 32, height: 32, marginRight: -6, background: "none" }}
             >
               <X size={16} />
             </button>
@@ -5971,8 +5971,6 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const retornoPorMoto = motos
     .map((m) => {
       const investimentoTotal = Number(m.valorCompra || 0);
-      const receitaMensal = m.contratoAtual ? Number(m.contratoAtual.valorMensal || 0) : 0;
-
       // recebido de verdade — soma os lançamentos de entrada que citam a placa dessa moto
       // (é assim que o fluxo de caixa já é lançado, ex: "Mensalidade URB5I50")
       const recebidoReal = pagamentosDaMoto(m, lancamentos).reduce((s, p) => s + Number(p.valor), 0);
