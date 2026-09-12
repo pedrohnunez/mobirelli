@@ -2966,10 +2966,10 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     return Math.max(0, (hoje.getFullYear() - d.getFullYear()) * 12 + (hoje.getMonth() - d.getMonth()));
   };
 
+  // igual ao payback do painel: conta só o valor de compra. Somar manutenção e custo
+  // extra fazia a meta andar pra trás a cada troca de óleo lançada
   const paybackDaMoto = (m) => {
-    const custosExtrasTotal = custosDaMoto(m, lancamentos).reduce((s, c) => s + Number(c.valorGasto || 0), 0);
-    const manutencaoTotal = (m.manutencoes || []).reduce((s, x) => s + Number(x.valorGasto || 0), 0);
-    const investimentoTotal = Number(m.valorCompra || 0) + custosExtrasTotal + manutencaoTotal;
+    const investimentoTotal = Number(m.valorCompra || 0);
     const recebidoReal = pagamentosDaMoto(m, lancamentos).reduce((s, p) => s + Number(p.valor), 0);
     return investimentoTotal > 0 ? Math.min(100, (recebidoReal / investimentoTotal) * 100) : 0;
   };
@@ -5874,13 +5874,18 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
     return dias.length ? Math.min(...dias) : null;
   })();
 
-  // retorno do investimento por moto — quanto já foi recebido de verdade (lançamentos de
-  // entrada que citam a placa) vs quanto ela custou (compra + custos extras + manutenção)
+  // retorno do investimento por moto — quanto já entrou de aluguel vs o que a moto
+  // CUSTOU PRA COMPRAR, e só isso. Somar manutenção e custo extra aqui fazia a meta
+  // andar pra trás: bastava lançar uma troca de óleo pra moto ficar mais longe de se
+  // pagar do que estava ontem. Esses gastos continuam no lucro do mês pelo Caixa —
+  // o payback é a pergunta "já recuperei o dinheiro que pus na moto?"
   const retornoPorMoto = motos
     .map((m) => {
-      const custosExtrasTotal = custosDaMoto(m, lancamentos).reduce((s, c) => s + Number(c.valorGasto || 0), 0);
-      const manutencaoTotal = (m.manutencoes || []).reduce((s, x) => s + Number(x.valorGasto || 0), 0);
-      const investimentoTotal = Number(m.valorCompra || 0) + custosExtrasTotal + manutencaoTotal;
+      const investimentoTotal = Number(m.valorCompra || 0);
+      const receitaMensal = m.contratoAtual ? Number(m.contratoAtual.valorMensal || 0) : 0;
+
+      // recebido de verdade — soma os lançamentos de entrada que citam a placa dessa moto
+      // (é assim que o fluxo de caixa já é lançado, ex: "Mensalidade URB5I50")
       const recebidoReal = pagamentosDaMoto(m, lancamentos).reduce((s, p) => s + Number(p.valor), 0);
       const restante = Math.max(0, investimentoTotal - recebidoReal);
       const percentPago = investimentoTotal > 0 ? Math.min(100, (recebidoReal / investimentoTotal) * 100) : 0;
@@ -6248,7 +6253,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             <div className="flex flex-col" style={{ gap: 12, paddingTop: 4, borderTop: "1px solid var(--rd-border-soft)" }}>
               <div className="flex items-baseline flex-wrap" style={{ gap: 8, paddingTop: 14 }}>
                 <span style={RD_LABEL}>Payback</span>
-                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta pra cada moto se pagar</span>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta pra cada moto devolver o valor de compra dela</span>
               </div>
               <div className="flex flex-col" style={{ gap: 9 }}>
                 {paybackPorMoto.map((r) => {
