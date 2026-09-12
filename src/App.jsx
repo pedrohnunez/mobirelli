@@ -1531,7 +1531,12 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
     setModal(null);
   };
 
-  const excluir = async (id) => persistClientes(clientes.filter((c) => c.id !== id));
+  const excluir = async (id) => {
+    const alvo = clientes.find((c) => c.id === id);
+    if (!alvo) return;
+    if (!window.confirm(`Excluir o cliente "${alvo.nome || "sem nome"}"? Isso não dá pra desfazer.`)) return;
+    await persistClientes(clientes.filter((c) => c.id !== id));
+  };
 
   const vincularMoto = async (cliente, dados) => {
     const moto = motos.find((m) => m.id === dados.motoId);
@@ -2821,6 +2826,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
   // antigos, de antes dessa integração com o Caixa), tira de lá; senão é um lançamento
   // de verdade no Caixa, tira de lá
   const excluirManutencao = async (moto, id) => {
+    const daMoto = manutencoesDaMoto(moto, lancamentos).find((m) => m.id === id);
+    if (!window.confirm(`Excluir a manutenção "${daMoto?.descricao || "sem descrição"}" de ${formatCurrency(daMoto?.valorGasto || 0)}?`)) return;
     const naMoto = (moto.manutencoes || []).some((m) => m.id === id);
     if (naMoto) {
       await salvarMoto({ ...moto, manutencoes: moto.manutencoes.filter((m) => m.id !== id) });
@@ -2830,6 +2837,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
   };
 
   const excluirCustoExtra = async (moto, id) => {
+    const oCusto = custosDaMoto(moto, lancamentos).find((c) => c.id === id);
+    if (!window.confirm(`Excluir o custo "${oCusto?.descricao || "sem descrição"}" de ${formatCurrency(oCusto?.valorGasto || 0)}?`)) return;
     const naMoto = (moto.custosExtras || []).some((c) => c.id === id);
     if (naMoto) {
       await salvarMoto({ ...moto, custosExtras: moto.custosExtras.filter((c) => c.id !== id) });
@@ -3680,7 +3689,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 }
 
-const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey, lancamentos }, ref) {
+const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey, lancamentos, onExcluido }, ref) {
   const [modal, setModal] = useState(null);
   const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
   const [verTodosFixos, setVerTodosFixos] = useState(false);
@@ -3701,7 +3710,17 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     await persist(next);
     setModal(null);
   };
-  const excluir = async (id) => persist(futuros.filter((x) => x.id !== id));
+  // mesma proteção da aba Lançado: pergunta antes e devolve a chance de desfazer
+  const excluir = async (id) => {
+    const alvo = futuros.find((x) => x.id === id);
+    if (!alvo) return;
+    const rotulo = `${nomeDoFuturo(alvo)} · ${formatCurrency(alvo.valor)}`;
+    const quantas = alvo.grupoParcelas ? futuros.filter((x) => x.grupoParcelas === alvo.grupoParcelas).length : 0;
+    const aviso = quantas > 1 ? ` (essa é 1 das ${quantas} parcelas; as outras continuam)` : "";
+    if (!window.confirm(`Excluir a conta futura "${rotulo}"${aviso}?`)) return;
+    await persist(futuros.filter((x) => x.id !== id));
+    onExcluido?.(alvo, rotulo);
+  };
 
   const { fixoMensalSaida, fixoMensalEntrada, avulsosPendentesSaida, avulsosPendentesEntrada, previstoSaida12Meses, previstoEntrada12Meses, saldoPrevisto12Meses } =
     totaisFuturos(futuros, motos);
@@ -4285,7 +4304,35 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     setModal(null);
   };
 
-  const excluir = async (id) => persist(lancamentos.filter((x) => x.id !== id));
+  // EXCLUIR não era mais difícil que esbarrar: o ícone de lixeira mora na mesma linha do
+  // valor, a linha inteira é clicável, e o clique apagava na hora, sem pergunta e sem
+  // volta (o banco guarda um JSON só, substituído a cada gravação — apagou, acabou).
+  // Agora pergunta antes, dizendo o que vai sumir, e ainda deixa desfazer depois.
+  const [desfazer, setDesfazer] = useState(null);
+  const desfazerTimer = useRef(null);
+  const oferecerDesfazer = (rotulo, alvo, onde) => {
+    if (desfazerTimer.current) clearTimeout(desfazerTimer.current);
+    setDesfazer({ rotulo, alvo, onde });
+    desfazerTimer.current = setTimeout(() => setDesfazer(null), 15000);
+  };
+  useEffect(() => () => desfazerTimer.current && clearTimeout(desfazerTimer.current), []);
+
+  const restaurar = async () => {
+    if (!desfazer) return;
+    if (desfazer.onde === "futuro") await persistFuturos([...(futuros || []), desfazer.alvo]);
+    else await persist([...lancamentos, desfazer.alvo]);
+    if (desfazerTimer.current) clearTimeout(desfazerTimer.current);
+    setDesfazer(null);
+  };
+
+  const excluir = async (id) => {
+    const alvo = lancamentos.find((x) => x.id === id);
+    if (!alvo) return;
+    const rotulo = `${alvo.categoria || alvo.descricao || "Lançamento"} · ${formatCurrency(alvo.valor)}`;
+    if (!window.confirm(`Excluir ${alvo.tipo === "entrada" ? "a entrada" : "a saída"} "${rotulo}" de ${formatDate(alvo.data)}?`)) return;
+    await persist(lancamentos.filter((x) => x.id !== id));
+    oferecerDesfazer(rotulo, alvo, "lancamento");
+  };
   const ordenados = [...lancamentos].sort((a, b) => (a.data < b.data ? 1 : -1));
 
   const porMes = {};
@@ -4692,6 +4739,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           onConfirmar={confirmarFuturo}
           mesAtualKey={mesAtualKey}
           lancamentos={lancamentos}
+          onExcluido={(f, rotulo) => oferecerDesfazer(rotulo, f, "futuro")}
         />
       ) : (
         <>
@@ -4818,6 +4866,47 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
         />
       )}
         </>
+      )}
+
+      {/* barra de desfazer — acima da barra de navegação, some sozinha em 15s. Vai por
+          portal no body porque tem ancestral com transform (as animações de entrada dos
+          cartões), e transform faz position:fixed grudar no ancestral em vez da tela */}
+      {desfazer && createPortal(
+        <div
+          className="fixed left-0 right-0 flex justify-center px-4 mbr-fade-in"
+          style={{ bottom: 92, zIndex: 120, pointerEvents: "none" }}
+        >
+          <div
+            className="flex items-center gap-3 rounded-2xl px-4 py-3 w-full"
+            style={{
+              maxWidth: 460,
+              background: theme.panel,
+              border: `1px solid ${theme.cardBorder}`,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+              pointerEvents: "auto",
+            }}
+          >
+            <div className="flex-1 min-w-0" style={{ fontFamily: BODY_FONT }}>
+              <div className="text-xs" style={{ color: theme.textMuted }}>Excluído</div>
+              <div className="truncate text-xs" style={{ color: theme.text, fontWeight: 600 }}>{desfazer.rotulo}</div>
+            </div>
+            <button
+              onClick={restaurar}
+              className="text-xs font-semibold rounded-xl px-3 py-2 flex-shrink-0"
+              style={{ background: theme.mint, color: theme.mintText, fontFamily: BODY_FONT }}
+            >
+              Desfazer
+            </button>
+            <button
+              onClick={() => setDesfazer(null)}
+              className="flex items-center justify-center flex-shrink-0"
+              style={{ color: theme.textMuted, width: 32, height: 32, marginRight: -6 }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
