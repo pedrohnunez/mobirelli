@@ -225,6 +225,7 @@ function custosDaMoto(moto, lancamentos) {
       data: l.data,
       descricao: l.descricao || l.categoria || "Sem descrição",
       valorGasto: l.valor,
+      doCaixa: true,
     }));
   return [...manuais, ...doCaixa].sort((a, b) => (a.data < b.data ? 1 : -1));
 }
@@ -289,6 +290,40 @@ function projecaoFuturosPorMes(futuros, meses = 12) {
 // assim a mensalidade de cada moto alugada entra automaticamente na previsão de
 // Futuros, sem precisar cadastrar de novo. Usa a data de término do contrato (se
 // tiver sido preenchida) como limite; sem data, entra como indefinido.
+// PRIMEIRA COBRANÇA de um contrato.
+//
+// O aluguel é pago no fim do período, não na entrada: quem alugou dia 4 deste mês só
+// paga dia 4 do mês QUE VEM. Então um contrato que começou neste mês ainda não gera
+// cobrança agora — e era isso que fazia o previsto do mês crescer sozinho assim que
+// uma moto nova era alugada, obrigando a ir olhar contrato por contrato pra saber o que
+// dava pra cobrar de verdade.
+//
+// Devolve a data (YYYY-MM-DD) da primeira cobrança: o dia de vencimento do contrato,
+// no mês seguinte ao do início. Sem data de início, não dá pra afirmar nada — devolve
+// null e o contrato segue valendo desde sempre, como era antes.
+function primeiraCobrancaDoContrato(contrato) {
+  const inicio = contrato?.dataInicio;
+  if (!inicio) return null;
+  const [ano, mes] = inicio.split("-").map(Number);
+  if (!ano || !mes) return null;
+  const dia = diaVencimentoDoContrato(contrato) || Number(inicio.slice(8, 10)) || 1;
+  // mês seguinte ao do início; o dia é limitado ao último dia desse mês (dia 31 em
+  // mês de 30, ou 29/30/31 em fevereiro, cairia no mês seguinte sem esse cuidado)
+  const alvo = new Date(ano, mes, 1);
+  const ultimoDia = new Date(alvo.getFullYear(), alvo.getMonth() + 1, 0).getDate();
+  const diaOk = Math.min(dia, ultimoDia);
+  return `${alvo.getFullYear()}-${String(alvo.getMonth() + 1).padStart(2, "0")}-${String(diaOk).padStart(2, "0")}`;
+}
+
+// o contrato já pode ser cobrado no mês "mesKey"? (mesKey no formato YYYY-MM)
+function contratoCobraNoMes(contrato, mesKey) {
+  const primeira = primeiraCobrancaDoContrato(contrato);
+  if (!primeira) return true;
+  if (mesKey < primeira.slice(0, 7)) return false;
+  const fim = contrato?.dataTermino;
+  return !fim || mesKey <= fim.slice(0, 7);
+}
+
 function contratosComoFuturos(motos) {
   return (motos || [])
     .filter((m) => m.contratoAtual && Number(m.contratoAtual.valorMensal) > 0)
@@ -298,8 +333,9 @@ function contratosComoFuturos(motos) {
       descricao: `Mensalidade ${formatPlaca(m.placa)}`,
       categoria: "Contrato ativo",
       valor: Number(m.contratoAtual.valorMensal) || 0,
-      vencimento: m.contratoAtual.dataInicio || todayISO(),
+      vencimento: primeiraCobrancaDoContrato(m.contratoAtual) || m.contratoAtual.dataInicio || todayISO(),
       diaVencimento: diaVencimentoDoContrato(m.contratoAtual),
+      dataInicioContrato: m.contratoAtual.dataInicio || "",
       dataTermino: m.contratoAtual.dataTermino || "",
       recorrente: true,
       pago: false,
@@ -470,29 +506,28 @@ function diaVencimentoDoContrato(contrato) {
   return null;
 }
 
-// vencido = já passou o dia de pagamento deste mês E ainda não tem nenhuma entrada
-// lançada no caixa pra essa moto depois desse vencimento — sem o segundo pedaço, o
-// pagamento continuava aparecendo como atrasado mesmo depois de lançado no Caixa
+// QUITOU o mês? Um pagamento lançado em qualquer dia do mês já quita a mensalidade
+// daquele mês. O dono lança a entrada no mês em que recebe o dinheiro, então é o mês do
+// lançamento que importa, não o dia: comparar com o dia do vencimento fazia o pagamento
+// recebido ANTES do dia (recebeu dia 5, vencimento dia 10) continuar contando como
+// atrasado — era isso que deixava a moto marcada em vermelho com o pagamento já lançado.
+// Lançamento de mês posterior também conta (pagou atrasado, mas pagou).
+const pagouNoMes = (pagamentos, mesKey) => (pagamentos || []).some((p) => (p.data || "").slice(0, 7) >= mesKey);
+
+// vencido = o mês já é cobrável, o dia de pagamento dele já passou e não existe nenhuma
+// entrada lançada no Caixa pra essa moto nesse mês
 const isContratoVencido = (contrato, pagamentos) => {
   const dia = diaVencimentoDoContrato(contrato);
   if (!dia) return false;
   const hoje = new Date();
   const hojeZero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
-  // a primeira cobrança só vence um mês depois do início do contrato — no mês em que o
-  // cliente começa a usar a moto ele ainda não paga nada, então não pode aparecer como
-  // atrasado antes do dia de cobrança do mês SEGUINTE ao início
-  if (contrato.dataInicio) {
-    const [anoInicio, mesInicio] = contrato.dataInicio.split("-").map(Number);
-    if (anoInicio && mesInicio) {
-      const primeiroVencimento = new Date(anoInicio, mesInicio, dia); // mês seguinte (mesInicio já é 1-based)
-      if (hojeZero < primeiroVencimento) return false;
-    }
-  }
+  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  // a primeira cobrança só vence um mês depois do início do contrato (aluguel é pago no
+  // fim do período) — e contrato já encerrado não vence mais nada
+  if (!contratoCobraNoMes(contrato, mesAtual)) return false;
   const vencimentoDoMes = new Date(hoje.getFullYear(), hoje.getMonth(), dia);
   if (hojeZero <= vencimentoDoMes) return false;
-  const vencimentoISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-  const jaPagou = (pagamentos || []).some((p) => p.data >= vencimentoISO);
-  return !jaPagou;
+  return !pagouNoMes(pagamentos, mesAtual);
 };
 
 const monthLabel = (key) => {
@@ -660,8 +695,7 @@ function MarcaMobirelli({ size = 38, raio = 11 }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        flex: "none",
-      }}
+        flex: "none" }}
     >
       <svg width={size * 0.66} viewBox="0 0 60 34" fill="none">
         <circle cx="12" cy="22" r="8" stroke="#F4F2EA" strokeWidth="4.5" />
@@ -685,8 +719,7 @@ function LinhaMarca() {
           background: "var(--rd-sidebar)",
           boxSizing: "border-box",
           flex: "none",
-          marginLeft: -1.6,
-        }}
+          marginLeft: -1.6 }}
       />
     </span>
   );
@@ -707,8 +740,7 @@ function AvatarIniciais({ username }) {
         justifyContent: "center",
         fontSize: 12,
         fontWeight: 700,
-        flex: "none",
-      }}
+        flex: "none" }}
     >
       {iniciais}
     </div>
@@ -724,8 +756,7 @@ function MotoPlate({ placa, size = "normal" }) {
         borderRadius: 999,
         padding: grande ? "6px 15px" : "3px 10px",
         display: "inline-flex",
-        alignItems: "center",
-      }}
+        alignItems: "center" }}
     >
       <span
         style={{
@@ -733,8 +764,7 @@ function MotoPlate({ placa, size = "normal" }) {
           fontWeight: 700,
           letterSpacing: grande ? 1.5 : 0.5,
           fontSize: grande ? 19 : 11.5,
-          color: "var(--rd-brand-light)",
-        }}
+          color: "var(--rd-brand-light)" }}
       >
         {placa ? formatPlaca(placa) : "SEM PLACA"}
       </span>
@@ -834,8 +864,7 @@ function Modal({ title, onClose, children }) {
           boxShadow: "0 -8px 34px rgba(0,0,0,0.34)",
           opacity: visible ? 1 : 0,
           transform: visible ? "translateY(0) scale(1)" : "translateY(28px) scale(0.97)",
-          transition: "transform 0.24s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease",
-        }}
+          transition: "transform 0.24s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sm:hidden mx-auto rounded-full" style={{ width: 36, height: 5, marginBottom: "var(--rd-s3)", background: "var(--rd-border)" }} />
@@ -881,8 +910,7 @@ function PdfViewer({ url, title, onClose }) {
           boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
           opacity: show ? 1 : 0,
           transform: show ? "scale(1)" : "scale(0.97)",
-          transition: "opacity 0.2s ease, transform 0.2s ease",
-        }}
+          transition: "opacity 0.2s ease, transform 0.2s ease" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div
@@ -925,8 +953,7 @@ function FieldLabel({ children }) {
         textTransform: "uppercase",
         color: "var(--rd-text-faint)",
         fontFamily: "var(--rd-font)",
-        marginBottom: 6,
-      }}
+        marginBottom: 6 }}
     >
       {children}
     </label>
@@ -1172,8 +1199,7 @@ function ValorComDetalhe({ children, itens, fmt }) {
                 border: `1px solid ${theme.cardBorder}`,
                 width: pos.largura,
                 boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
-                padding: 10,
-              }}
+                padding: 10 }}
             >
               {itens.map((it, i) => (
                 <div
@@ -1586,8 +1612,7 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
             padding: "10px 14px 10px 38px",
             color: "var(--rd-text)",
             fontSize: 13.5,
-            fontFamily: "var(--rd-font)",
-          }}
+            fontFamily: "var(--rd-font)" }}
           placeholder="Buscar por nome ou CPF/CNPJ"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
@@ -1639,8 +1664,7 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
                         color: "var(--rd-brand-light)",
                         background: "var(--rd-brand)",
                         borderRadius: 999,
-                        padding: "3px 9px",
-                      }}
+                        padding: "3px 9px" }}
                     >
                       {formatPlaca(motoVinculada.placa)}
                     </span>
@@ -1684,8 +1708,7 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
                     // fechada compartilharem a mesma margem em vez de cada uma ter a sua
                     padding: "0 var(--rd-pad-row-x) var(--rd-s5)",
                     borderTop: "1px solid var(--rd-border-soft)",
-                    paddingTop: "var(--rd-s5)",
-                  }}
+                    paddingTop: "var(--rd-s5)" }}
                 >
                   {motoVinculada ? (
                     <div className="mb-5">
@@ -1941,8 +1964,7 @@ function BorraProgressiva({ lado }) {
               backdropFilter: "blur(0.8px)",
               WebkitBackdropFilter: "blur(0.8px)",
               maskImage: mask,
-              WebkitMaskImage: mask,
-            }}
+              WebkitMaskImage: mask }}
           />
         );
       })}
@@ -1963,8 +1985,7 @@ function MapToolButton({ icon: Icon, label, onClick, active }) {
         background: active ? theme.mint : hexToRgba(theme.card, 0.92),
         color: active ? theme.mintText : theme.text,
         border: `1px solid ${theme.cardBorder}`,
-        boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
-      }}
+        boxShadow: "0 1px 4px rgba(0,0,0,0.3)" }}
     >
       <Icon size={16} />
     </button>
@@ -2216,8 +2237,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         border: rounded ? `1px solid ${theme.cardBorder}` : "none",
         height,
         "--mbr-top-inset": `${topInset}px`,
-        "--mbr-bottom-inset": `${bottomInset}px`,
-      }}
+        "--mbr-bottom-inset": `${bottomInset}px` }}
     >
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
       <div className="absolute left-3 flex gap-3 z-10" style={{ top: 12 + topInset }}>
@@ -2844,6 +2864,35 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     setModal(null);
   };
 
+  // "Lançar pagamento" na moto atrasada: cria a entrada no Caixa já vinculada à moto
+  // (motoId), que é justamente o que faz ela sair de "pagamento atrasado". Antes o único
+  // caminho era ir na aba Caixa e lembrar de escolher a moto na mão — sem isso o app não
+  // liga o dinheiro a ninguém e a moto fica vermelha com o pagamento já lançado.
+  const registrarPagamento = async (moto) => {
+    const valor = Number(moto.contratoAtual?.valorMensal) || 0;
+    if (!window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)} hoje?`)) return;
+    const lancamento = {
+      id: uid(),
+      data: todayISO(),
+      tipo: "entrada",
+      natureza: "Operacional",
+      categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+      valor,
+      descricao: "",
+      forma: "",
+      motoId: moto.id,
+      parcelas: 1,
+    };
+    await persistLancamentos([...(lancamentos || []), lancamento]);
+  };
+
+  // reclassifica um gasto que já está no Caixa como manutenção — lançamentos antigos,
+  // feitos antes do campo "Moto dessa manutenção" existir, ficaram com a natureza padrão
+  // e por isso apareciam em "Custos" em vez de "Manutenções"
+  const marcarComoManutencao = async (id) => {
+    await persistLancamentos((lancamentos || []).map((l) => (l.id === id ? { ...l, natureza: "Manutenção" } : l)));
+  };
+
   const salvarCustoExtra = async (moto, custo) => {
     const lancamento = {
       id: custo.id,
@@ -2966,8 +3015,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
               borderRadius: 999,
               padding: "9px 16px",
               fontSize: 13,
-              fontWeight: 600,
-            }}
+              fontWeight: 600 }}
           >
             <Search size={14} strokeWidth={2.75} /> Consultar placa
           </button>
@@ -2996,8 +3044,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
               padding: "10px 14px 10px 38px",
               color: "var(--rd-text)",
               fontSize: 13.5,
-              fontFamily: "var(--rd-font)",
-            }}
+              fontFamily: "var(--rd-font)" }}
             placeholder="Buscar por placa, chassi, renavam ou modelo"
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
@@ -3014,8 +3061,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                 fontSize: 12.5,
                 fontWeight: filtroStatus === f.id ? 700 : 600,
                 background: filtroStatus === f.id ? "var(--rd-brand)" : "transparent",
-                color: filtroStatus === f.id ? "#F0F5EE" : f.id === "disponivel" ? "var(--rd-attention)" : "var(--rd-text-dim)",
-              }}
+                color: filtroStatus === f.id ? "#F0F5EE" : f.id === "disponivel" ? "var(--rd-attention)" : "var(--rd-text-dim)" }}
             >
               {f.label}
             </button>
@@ -3044,6 +3090,9 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
             {linhas.map((moto) => {
           const pagamentos = pagamentosDaMoto(moto, lancamentos);
           const vencido = moto.status === "alugada" && isContratoVencido(moto.contratoAtual, pagamentos);
+          const mesAtualKey = todayISO().slice(0, 7);
+          const cobraEsteMes = moto.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+          const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentos, mesAtualKey);
           const cliente = clientes.find((c) => c.id === moto.contratoAtual?.clienteId);
           const aberto = expandido === moto.id;
           const diaVenc = diaVencimentoDoContrato(moto.contratoAtual);
@@ -3066,8 +3115,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                       borderRadius: 999,
                       padding: "2px 9px",
                       color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)",
-                      background: parada ? "#2A2115" : "var(--rd-brand)",
-                    }}
+                      background: parada ? "#2A2115" : "var(--rd-brand)" }}
                   >
                     {parada ? `${MOTO_STATUS[moto.status]?.label || "Parada"}${dias != null ? ` ${dias}d` : ""}` : "Alugada"}
                   </span>
@@ -3152,8 +3200,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     // fechada compartilharem a mesma margem em vez de cada uma ter a sua
                     padding: "0 var(--rd-pad-row-x) var(--rd-s5)",
                     borderTop: "1px solid var(--rd-border-soft)",
-                    paddingTop: "var(--rd-s5)",
-                  }}
+                    paddingTop: "var(--rd-s5)" }}
                 >
                   <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-5">
                     {moto.modelo || "Modelo não informado"}
@@ -3166,8 +3213,34 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     {moto.contratoAtual ? (
                       <div className="rounded-xl p-3" style={{ background: theme.card2 }}>
                         {vencido && (
-                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
-                            <AlertTriangle size={13} /> Pagamento atrasado
+                          <div className="mb-2">
+                            <div className="flex items-center gap-1.5" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
+                              <AlertTriangle size={13} /> Pagamento atrasado
+                              {diaVencimentoDoContrato(moto.contratoAtual) && ` — venceu dia ${diaVencimentoDoContrato(moto.contratoAtual)} e não tem pagamento lançado no caixa`}
+                            </div>
+                            {permissoes.podeEditar && (
+                              <button
+                                onClick={() => registrarPagamento(moto)}
+                                className="text-xs font-semibold rounded-xl px-3 py-1.5 mt-2 flex items-center gap-1"
+                                style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
+                              >
+                                <CheckCircle2 size={12} /> Lançar pagamento recebido
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {/* o contrário do atraso, pra fechar o ciclo: lançou no caixa, a moto
+                            mostra na hora que o mês está quitado */}
+                        {pagoEsteMes && (
+                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.mint, fontSize: 12, fontWeight: 600 }}>
+                            <CheckCircle2 size={13} /> Pagamento deste mês já lançado
+                          </div>
+                        )}
+                        {/* aluguel é pago no fim do período: quem alugou agora só paga no mês
+                            que vem. Sem isso a moto parecia cobrável no mês da assinatura */}
+                        {moto.status === "alugada" && !cobraEsteMes && primeiraCobrancaDoContrato(moto.contratoAtual) && (
+                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.amber, fontSize: 12, fontWeight: 600 }}>
+                            1ª cobrança em {monthLabel(primeiraCobrancaDoContrato(moto.contratoAtual).slice(0, 7))}
                           </div>
                         )}
                         <div className="flex items-center justify-between mb-1">
@@ -3178,6 +3251,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                         </div>
                         <div style={{ color: theme.textMuted, fontSize: 12 }}>
                           {moto.contratoAtual.numeroClienteMoto}º cliente · contrato nº {moto.contratoAtual.numeroContrato}
+                          {moto.contratoAtual.dataInicio && ` · alugou em ${formatDate(moto.contratoAtual.dataInicio)}`}
                           {diaVencimentoDoContrato(moto.contratoAtual) && ` · pagamento todo dia ${diaVencimentoDoContrato(moto.contratoAtual)}`}
                           {moto.contratoAtual.dataTermino && ` · até ${formatDate(moto.contratoAtual.dataTermino)}`}
                         </div>
@@ -3291,6 +3365,16 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                           </span>
                           <span className="flex items-center gap-2 flex-shrink-0">
                             <span style={{ color: theme.textMuted }}>{formatCurrency(c.valorGasto)}</span>
+                            {permissoes.podeEditar && c.doCaixa && (
+                              <button
+                                onClick={() => marcarComoManutencao(c.id)}
+                                title="Mover pra Manutenções (muda a natureza do lançamento no caixa)"
+                                className="text-xs font-semibold rounded-lg px-2 py-1"
+                                style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText, whiteSpace: "nowrap" }}
+                              >
+                                é manutenção
+                              </button>
+                            )}
                             {permissoes.podeEditar && (
                               <button
                                 onClick={() => excluirCustoExtra(moto, c.id)}
@@ -3314,7 +3398,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     </div>
                     {pagamentos.length === 0 ? (
                       <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                        Nenhum pagamento com "{formatPlaca(moto.placa)}" na categoria/descrição ainda.
+                        Nenhum pagamento lançado pra essa moto ainda — lance no Caixa escolhendo a moto,
+                        ou pelo botão de pagamento aqui em cima quando estiver atrasado.
                       </div>
                     ) : (
                       <>
@@ -3467,6 +3552,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const selecionarMoto = (id) => setForm((f) => ({ ...f, motoId: id }));
+  const ehManutencao = form.natureza === "Manutenção";
 
   // o formulário só mostra Valor/Data/Natureza/Categoria de cara — "Moto relacionada",
   // "Forma de pagamento", "Parcelas" e "Descrição" ficam atrás de "Mais opções", já
@@ -3487,8 +3573,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
             style={{
               background: form.tipo === t ? (t === "entrada" ? theme.mint : theme.coral) : "transparent",
               color: form.tipo === t ? theme.mintText : theme.textMuted,
-              border: `1px solid ${theme.cardBorder}`,
-            }}
+              border: `1px solid ${theme.cardBorder}` }}
           >
             {t === "entrada" ? "Entrada" : "Saída"}
           </button>
@@ -3498,13 +3583,16 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
       <FieldLabel>Natureza</FieldLabel>
       <SelectField value={form.natureza} onChange={set("natureza")} options={NATUREZAS.map((n) => ({ value: n, label: n }))} />
 
-      {/* Manutenção é o único caso em que a moto NÃO é opcional: é ela que faz o gasto
-          aparecer na ficha da moto, em "Manutenções". Escondida atrás de "Mais opções",
-          era fácil salvar uma troca de óleo sem moto (ou com a natureza padrão) e depois
-          não achar ela embaixo da moto. Aqui o campo sobe junto com a escolha. */}
-      {form.natureza === "Manutenção" && (motos || []).length > 0 && (
+      {/* Dois casos em que a moto NÃO é detalhe opcional e por isso não fica escondida
+          atrás de "Mais opções":
+          - Manutenção: é a moto que faz o gasto aparecer na ficha dela, em "Manutenções"
+            (era fácil salvar uma troca de óleo sem moto e depois não achar ela lá).
+          - Entrada: é a moto que liga o pagamento ao aluguel. Sem ela o app não tem como
+            saber de quem é o dinheiro, e a moto continuava marcada como "pagamento
+            atrasado" mesmo com o pagamento já lançado no caixa. */}
+      {(form.natureza === "Manutenção" || form.tipo === "entrada") && (motos || []).length > 0 && (
         <>
-          <FieldLabel>Moto dessa manutenção</FieldLabel>
+          <FieldLabel>{ehManutencao ? "Moto dessa manutenção" : "Moto desse pagamento"}</FieldLabel>
           <SelectField
             value={form.motoId || ""}
             onChange={(e) => selecionarMoto(e.target.value)}
@@ -3517,9 +3605,13 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
             className="text-xs -mt-2 mb-3"
             style={{ color: form.motoId ? theme.textMuted : theme.amber, fontFamily: BODY_FONT }}
           >
-            {form.motoId
-              ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
-              : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."}
+            {ehManutencao
+              ? form.motoId
+                ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
+                : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."
+              : form.motoId
+                ? "Baixa o aluguel dessa moto no mês da data abaixo — ela sai de \"pagamento atrasado\" na aba Motos e na agenda de cobranças."
+                : "Escolha a moto pra esse pagamento baixar o aluguel dela. Sem moto, ela continua marcada como \"pagamento atrasado\"."}
           </div>
         </>
       )}
@@ -3548,7 +3640,9 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
         </button>
       ) : (
         <>
-          {(motos || []).length > 0 && form.natureza !== "Manutenção" && (
+          {/* a moto já aparece lá em cima quando é manutenção ou entrada — aqui só pra
+              saída comum (combustível, despachante...), onde ela é mesmo opcional */}
+          {(motos || []).length > 0 && !ehManutencao && form.tipo !== "entrada" && (
             <>
               <FieldLabel>Moto relacionada (opcional)</FieldLabel>
               <SelectField
@@ -3721,8 +3815,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
             style={{
               background: form.tipo === t ? (t === "entrada" ? theme.mint : theme.coral) : "transparent",
               color: form.tipo === t ? theme.mintText : theme.textMuted,
-              border: `1px solid ${theme.cardBorder}`,
-            }}
+              border: `1px solid ${theme.cardBorder}` }}
           >
             {t === "entrada" ? "Recebimento futuro" : "Conta a pagar"}
           </button>
@@ -3767,8 +3860,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
               background: modo === op.id ? theme.mint : "transparent",
               color: modo === op.id ? theme.mintText : theme.textMuted,
               border: `1px solid ${theme.cardBorder}`,
-              opacity: jaEhParcela && op.id !== modo ? 0.4 : 1,
-            }}
+              opacity: jaEhParcela && op.id !== modo ? 0.4 : 1 }}
           >
             {op.label}
           </button>
@@ -3869,11 +3961,12 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 }
 
-const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey }, ref) {
+const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey, lancamentos }, ref) {
   const [modal, setModal] = useState(null);
   const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
   const [verTodosFixos, setVerTodosFixos] = useState(false);
   const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
+  const [verGrafico, setVerGrafico] = useState(false);
   const [grupoAberto, setGrupoAberto] = useState(null);
   // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
   // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
@@ -3904,24 +3997,58 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   // agenda de cobrança: agrupa por dia do mês quem tem que ser cobrado — pensado pra
   // quando tiver muitas motos/clientes e ficar difícil lembrar "quem vence quando" só
   // olhando a lista corrida de contratos/recorrentes
-  const cobrancasPorDia = (() => {
-    const entradasRecorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada")];
-    const porDia = new Map();
-    entradasRecorrentes.forEach((f) => {
-      const dia = f.diaVencimento || (f.vencimento ? new Date(`${f.vencimento}T00:00:00`).getDate() : null);
+  // A agenda responde "quem eu cobro ESTE mês?". Um contrato fechado neste mês ainda não
+  // entra: o aluguel é pago no fim do período, então a 1ª cobrança dele é no mês que vem.
+  // Por isso a lista é separada em dois blocos — antes tudo aparecia junto e só dava pra
+  // saber de quem cobrar indo olhar a data de início contrato por contrato.
+  const cobrancas = (() => {
+    const hojeISO = todayISO();
+    const mesHoje = hojeISO.slice(0, 7);
+    const diaHoje = Number(hojeISO.slice(8, 10));
+    const recorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada")];
+    const agora = [];
+    const depois = [];
+    recorrentes.forEach((f) => {
+      const dia = f.diaVencimento || (f.vencimento ? Number(f.vencimento.slice(8, 10)) : null);
       if (!dia) return;
       const moto = motos?.find((m) => m.id === f.motoId);
       const cliente = moto?.contratoAtual ? clientes?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
+      const mesDaPrimeira = (f.vencimento || "").slice(0, 7);
+      const jaComecou = !mesDaPrimeira || mesDaPrimeira <= mesAtualKey;
+      // estado de cada cobrança, lido de onde o dinheiro realmente entra: pra contrato é
+      // o pagamento lançado no Caixa pra essa moto (mesmo caminho da aba Motos, então as
+      // duas telas nunca se contradizem); pra conta recorrente comum é o "confirmados"
+      // dela. Antes a agenda era só uma lista de dias, sem saber quem já pagou.
+      const recebido = jaComecou
+        ? moto
+          ? pagouNoMes(pagamentosDaMoto(moto, lancamentos), mesAtualKey)
+          : (f.confirmados || []).includes(mesAtualKey)
+        : false;
+      const atrasado = jaComecou && !recebido && mesAtualKey === mesHoje && dia < diaHoje;
       const item = {
         id: f.id,
+        dia,
         label: cliente?.nome || nomeDoFuturo(f),
         sub: moto ? formatPlaca(moto.placa) : null,
         valor: Number(f.valor) || 0,
+        desde: f.dataInicioContrato || "",
+        mesDaPrimeira,
+        recebido,
+        atrasado,
       };
-      if (!porDia.has(dia)) porDia.set(dia, []);
-      porDia.get(dia).push(item);
+      (jaComecou ? agora : depois).push(item);
     });
-    return [...porDia.entries()].sort((a, b) => a[0] - b[0]);
+    const porDia = (lista) => lista.sort((a, b) => a.dia - b.dia);
+    // o que está atrasado sobe, o que já entrou desce — é essa a ordem em que a pessoa
+    // precisa olhar a lista, não a ordem do calendário
+    const peso = (it) => (it.atrasado ? 0 : it.recebido ? 2 : 1);
+    return {
+      agora: porDia(agora).sort((a, b) => peso(a) - peso(b)),
+      depois: porDia(depois),
+      aReceber: agora.filter((it) => !it.recebido).reduce((t, it) => t + it.valor, 0),
+      recebido: agora.filter((it) => it.recebido).reduce((t, it) => t + it.valor, 0),
+      atrasadas: agora.filter((it) => it.atrasado).length,
+    };
   })();
 
   // Junta numa linha só o que é "a mesma conta repetida", pra lista não virar um
@@ -4025,8 +4152,7 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
         padding: "13px 18px",
         background: dentroDeGrupo ? "var(--rd-surface-2)" : "var(--rd-surface)",
         border: `1px solid ${dentroDeGrupo ? "transparent" : "var(--rd-border)"}`,
-        opacity: jaConfirmadoEsteMes ? 0.55 : 1,
-      }}
+        opacity: jaConfirmadoEsteMes ? 0.55 : 1 }}
     >
       <div className="flex items-center min-w-0" style={{ gap: 12 }}>
         <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}>
@@ -4044,8 +4170,7 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
                   padding: "1px 8px",
                   background: "var(--rd-surface-2)",
                   color: "var(--rd-text-dim)",
-                  flex: "none",
-                }}
+                  flex: "none" }}
               >
                 Parcela {f.parcelaAtual || 1}/{f.parcelasTotal}
               </span>
@@ -4095,118 +4220,152 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   };
 
   return (
-    <div className="flex flex-col" style={{ gap: 16 }}>
-      <div className="grid grid-cols-1 sm:grid-cols-3" style={{ gap: 12 }}>
-        <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "16px 18px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-dim)", marginBottom: 4 }}>
-            A receber (12 meses)
+    <div>
+      {(cobrancas.agora.length > 0 || cobrancas.depois.length > 0) && (
+        <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
+          <h3 style={{ fontSize: 16, color: "var(--rd-text)" }} className="mb-1">
+            Agenda de cobranças
+          </h3>
+          <div className="text-xs mb-3" style={{ color: "var(--rd-text-dim)" }}>
+            Quem você cobra em {monthLabel(mesAtualKey)}
+            {cobrancas.aReceber > 0 && (
+              <>
+                {" · falta entrar "}
+                <span style={{ color: "var(--rd-text)", fontWeight: 700 }}>{formatCurrency(cobrancas.aReceber)}</span>
+              </>
+            )}
+            {cobrancas.atrasadas > 0 && (
+              <span style={{ color: "var(--rd-negative)", fontWeight: 700 }}>
+                {` · ${cobrancas.atrasadas} atrasad${cobrancas.atrasadas === 1 ? "a" : "as"}`}
+              </span>
+            )}
           </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "var(--rd-positive)" }}>{formatCurrency(previstoEntrada12Meses)}</div>
-          <div style={{ fontSize: 11.5, color: "var(--rd-text-dim)", marginTop: 2 }}>
-            fixo/mês: {formatCurrency(fixoMensalEntrada)} · avulso: {formatCurrency(avulsosPendentesEntrada)}
-          </div>
-        </div>
-        <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "16px 18px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-dim)", marginBottom: 4 }}>
-            A pagar (12 meses)
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "var(--rd-negative)" }}>{formatCurrency(previstoSaida12Meses)}</div>
-          <div style={{ fontSize: 11.5, color: "var(--rd-text-dim)", marginTop: 2 }}>
-            fixo/mês: {formatCurrency(fixoMensalSaida)} · avulso: {formatCurrency(avulsosPendentesSaida)}
-          </div>
-        </div>
-        <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "16px 18px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-dim)", marginBottom: 4 }}>
-            Saldo previsto (12 meses)
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: saldoPrevisto12Meses >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
-            {formatCurrency(saldoPrevisto12Meses)}
-          </div>
-        </div>
-      </div>
 
-      {cobrancasPorDia.length > 0 && (
-        <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "20px 22px" }}>
-          <span style={{ ...RD_LABEL, display: "block", marginBottom: 12 }}>Agenda de cobranças</span>
-          <div className="flex flex-col">
-            {(verTodasCobrancas ? cobrancasPorDia : cobrancasPorDia.slice(0, 4)).map(([dia, itens], i) => (
-              <div key={dia} className="flex items-start" style={{ gap: 12, padding: "10px 0", borderTop: i === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
+          {cobrancas.agora.length === 0 ? (
+            <div className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
+              Nenhuma cobrança neste mês.
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              {(verTodasCobrancas ? cobrancas.agora : cobrancas.agora.slice(0, 5)).map((it, i) => (
                 <div
-                  className="flex-shrink-0 flex items-center justify-center"
-                  style={{ width: 38, height: 38, borderRadius: 10, background: "var(--rd-surface-2)", color: "var(--rd-text)", fontWeight: 700, fontSize: 13 }}
+                  key={it.id}
+                  className="flex items-center gap-3 py-2.5"
+                  style={{ borderTop: i === 0 ? "none" : `1px solid ${"var(--rd-row-border)"}`, opacity: it.recebido ? 0.55 : 1 }}
                 >
-                  {String(dia).padStart(2, "0")}
-                </div>
-                <div className="flex-1 flex flex-col min-w-0" style={{ gap: 4 }}>
-                  {itens.map((it) => (
-                    <div key={it.id} className="flex items-center justify-between" style={{ gap: 8, fontSize: 12 }}>
-                      <span className="truncate" style={{ color: "var(--rd-text)" }}>
-                        {it.label}
-                        {it.sub ? ` · ${it.sub}` : ""}
-                      </span>
-                      <span style={{ color: "var(--rd-positive)", fontWeight: 700, flexShrink: 0 }}>{formatCurrency(it.valor)}</span>
+                  <div
+                    className="flex-shrink-0 flex items-center justify-center rounded-lg"
+                    style={{
+                      width: 38,
+                      height: 38,
+                      background: "var(--rd-surface-2)",
+                      color: it.recebido ? "var(--rd-positive)" : it.atrasado ? "var(--rd-negative)" : "var(--rd-text)",
+                      fontWeight: 700,
+                      fontSize: 13 }}
+                  >
+                    {String(it.dia).padStart(2, "0")}
+                  </div>
+                  <div className="flex-1 min-w-0" style={{}}>
+                    <div className="truncate text-xs" style={{ color: "var(--rd-text)" }}>{it.label}</div>
+                    {/* o estado vem do Caixa: lançou o pagamento da moto, a linha muda aqui */}
+                    <div className="text-xs" style={{ color: it.recebido ? "var(--rd-positive)" : it.atrasado ? "var(--rd-negative)" : "var(--rd-text-dim)" }}>
+                      {it.sub || ""}
+                      {it.recebido ? `${it.sub ? " · " : ""}já recebido` : it.atrasado ? `${it.sub ? " · " : ""}atrasado` : ""}
                     </div>
-                  ))}
+                  </div>
+                  <span
+                    className="text-xs flex-shrink-0"
+                    style={{ color: it.atrasado ? "var(--rd-negative)" : "var(--rd-positive)", fontWeight: 700 }}
+                  >
+                    {formatCurrency(it.valor)}
+                  </span>
                 </div>
-              </div>
-            ))}
-          </div>
-          {cobrancasPorDia.length > 4 && (
+              ))}
+            </div>
+          )}
+          {cobrancas.agora.length > 5 && (
             <button
               onClick={() => setVerTodasCobrancas((v) => !v)}
-              style={{ color: "var(--rd-brand-light)", fontSize: 12.5, fontWeight: 700, marginTop: 8, minHeight: 32, background: "none" }}
+              className="text-xs font-semibold mt-2"
+              style={{ color: "var(--rd-positive)", minHeight: 32 }}
             >
-              {verTodasCobrancas ? "Ver menos" : `Ver mais (${cobrancasPorDia.length - 4})`}
+              {verTodasCobrancas ? "Ver menos" : `Ver mais (${cobrancas.agora.length - 5})`}
             </button>
+          )}
+
+          {/* contratos fechados neste mês: a 1ª cobrança cai só no mês seguinte. Aqui o
+              mês aparece de propósito, porque é justamente a informação que faltava —
+              junto com a data em que o cliente alugou, que não existia em lugar nenhum */}
+          {cobrancas.depois.length > 0 && (
+            <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${"var(--rd-row-border)"}` }}>
+              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
+                Ainda não cobra
+              </div>
+              <div className="flex flex-col">
+                {cobrancas.depois.map((it, i) => (
+                  <div
+                    key={it.id}
+                    className="flex items-center gap-3 py-2.5"
+                    style={{ borderTop: i === 0 ? "none" : `1px solid ${"var(--rd-row-border)"}` }}
+                  >
+                    <div
+                      className="flex-shrink-0 flex items-center justify-center rounded-lg"
+                      style={{ width: 38, height: 38, background: "var(--rd-surface-2)", color: "var(--rd-attention)", fontWeight: 700, fontSize: 13 }}
+                    >
+                      {String(it.dia).padStart(2, "0")}
+                    </div>
+                    <div className="flex-1 min-w-0" style={{}}>
+                      <div className="truncate text-xs" style={{ color: "var(--rd-text)" }}>{it.label}</div>
+                      <div className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
+                        {it.sub ? `${it.sub} · ` : ""}
+                        {it.desde ? `alugou em ${formatDate(it.desde)}` : "sem data de início"}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--rd-attention)" }}>
+                        1ª cobrança em {monthLabel(it.mesDaPrimeira)}
+                      </div>
+                    </div>
+                    <span className="text-xs flex-shrink-0" style={{ color: "var(--rd-text-dim)", fontWeight: 700 }}>
+                      {formatCurrency(it.valor)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
 
-      <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "20px 22px" }}>
-        <span style={{ ...RD_LABEL, display: "block", marginBottom: 12 }}>Previsão por mês</span>
-        {futuros.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Cadastre uma conta futura pra ver a previsão aqui.</div>
-        ) : (
-          <div style={{ width: "100%", height: 280 }}>
-            <ResponsiveContainer>
-              <ComposedChart data={projecao} margin={{ left: -12 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--rd-border)" vertical={false} />
-                <XAxis dataKey="mes" stroke="var(--rd-text-dim)" fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke="var(--rd-text-dim)" fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
-                <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
-                <Legend />
-                <Bar dataKey="entrada" name="A receber" fill="var(--rd-positive)" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="saida" name="A pagar" fill="var(--rd-negative)" radius={[4, 4, 0, 0]} />
-                <Line
-                  type="monotone"
-                  dataKey="saldo"
-                  name="Saldo"
-                  stroke="var(--rd-attention)"
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#C68A3A", strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="saldo"
-                  stroke="#E0B87A"
-                  strokeOpacity={0.55}
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                  legendType="none"
-                  className="mbr-linha-cometa"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
+      {/* os três números do ano em UM cartão, em vez de três cartões com duas linhas de
+          jargão cada ("fixo/mês", "avulso") — a aba abria com quatro blocos de resumo
+          antes de mostrar qualquer conta, e era isso que fazia ela parecer cheia demais */}
+      <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
+        <div className="text-xs uppercase tracking-wide mb-3" style={{ color: "var(--rd-text-dim)" }}>
+          Próximos 12 meses
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <div className="text-xs mb-0.5" style={{ color: "var(--rd-text-dim)" }}>A receber</div>
+            <div style={{ fontSize: 18, color: "var(--rd-positive)" }}>{formatCurrency(previstoEntrada12Meses)}</div>
           </div>
-        )}
+          <div>
+            <div className="text-xs mb-0.5" style={{ color: "var(--rd-text-dim)" }}>A pagar</div>
+            <div style={{ fontSize: 18, color: "var(--rd-negative)" }}>{formatCurrency(previstoSaida12Meses)}</div>
+          </div>
+          <div>
+            <div className="text-xs mb-0.5" style={{ color: "var(--rd-text-dim)" }}>Sobra prevista</div>
+            <div style={{ fontSize: 18, color: saldoPrevisto12Meses >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+              {formatCurrency(saldoPrevisto12Meses)}
+            </div>
+          </div>
+        </div>
       </div>
 
       {recorrentes.length > 0 && (
-        <div className="flex flex-col" style={{ gap: 10 }}>
-          <span style={RD_LABEL}>Todo mês</span>
-          <div className="flex flex-col" style={{ gap: 8 }}>
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
+            Todo mês
+          </div>
+          <div className="flex flex-col gap-2">
             {(verTodosFixos ? gruposFixos : gruposFixos.slice(0, 4)).map((g) =>
               g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
             )}
@@ -4214,7 +4373,8 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
           {gruposFixos.length > 4 && (
             <button
               onClick={() => setVerTodosFixos((v) => !v)}
-              style={{ color: "var(--rd-brand-light)", fontSize: 12.5, fontWeight: 700, minHeight: 32, background: "none", alignSelf: "flex-start" }}
+              className="text-xs font-semibold mt-2"
+              style={{ color: "var(--rd-positive)", minHeight: 32 }}
             >
               {verTodosFixos ? "Ver menos" : `Ver mais (${gruposFixos.length - 4})`}
             </button>
@@ -4222,15 +4382,17 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
         </div>
       )}
 
-      <div className="flex flex-col" style={{ gap: 10 }}>
-        <span style={RD_LABEL}>Parcelamentos</span>
+      <div>
+        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
+          Parcelamentos
+        </div>
         {gruposAvulsos.length === 0 ? (
-          <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: "1px solid var(--rd-border)" }}>
+          <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: `1px solid ${"var(--rd-border)"}` }}>
             Nenhum parcelamento ou conta com data marcada.
           </div>
         ) : (
           <>
-            <div className="flex flex-col" style={{ gap: 8 }}>
+            <div className="flex flex-col gap-2">
               {(verTodosAvulsos ? gruposAvulsos : gruposAvulsos.slice(0, 4)).map((g) =>
                 g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
               )}
@@ -4238,13 +4400,70 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
             {gruposAvulsos.length > 4 && (
               <button
                 onClick={() => setVerTodosAvulsos((v) => !v)}
-                style={{ color: "var(--rd-brand-light)", fontSize: 12.5, fontWeight: 700, minHeight: 32, background: "none", alignSelf: "flex-start" }}
+                className="text-xs font-semibold mt-2"
+                style={{ color: "var(--rd-positive)", minHeight: 32 }}
               >
                 {verTodosAvulsos ? "Ver menos" : `Ver mais (${gruposAvulsos.length - 4})`}
               </button>
             )}
           </>
         )}
+      </div>
+
+      {/* o gráfico é consulta, não rotina: ocupava 280px no meio do caminho entre a
+          agenda e as contas. Fica no fim, fechado, e abre quando a pessoa quiser */}
+      <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
+        <button
+          onClick={() => setVerGrafico((v) => !v)}
+          className="w-full flex items-center justify-between"
+          style={{ minHeight: 32 }}
+        >
+          <h3 style={{ fontSize: 16, color: "var(--rd-text)" }}>Previsão por mês</h3>
+          {verGrafico ? <ChevronUp size={18} color={"var(--rd-text-dim)"} /> : <ChevronDown size={18} color={"var(--rd-text-dim)"} />}
+        </button>
+        <Collapse open={verGrafico}>
+          <div className="pt-3">
+            {futuros.length === 0 ? (
+              <div className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
+                Cadastre uma conta futura pra ver a previsão aqui.
+              </div>
+            ) : (
+              <div style={{ width: "100%", height: 280 }}>
+                <ResponsiveContainer>
+                  <ComposedChart data={projecao} margin={{ left: -12 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={"var(--rd-border)"} vertical={false} />
+                    <XAxis dataKey="mes" stroke={"var(--rd-text-dim)"} fontSize={11} axisLine={false} tickLine={false} />
+                    <YAxis stroke={"var(--rd-text-dim)"} fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
+                    <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
+                    <Legend />
+                    <Bar dataKey="entrada" name="A receber" fill={"var(--rd-positive)"} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="saida" name="A pagar" fill={"var(--rd-negative)"} radius={[4, 4, 0, 0]} />
+                    <Line
+                      type="monotone"
+                      dataKey="saldo"
+                      name="Saldo"
+                      stroke={"var(--rd-attention)"}
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: "var(--rd-attention)", strokeWidth: 0 }}
+                      activeDot={{ r: 5 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="saldo"
+                      stroke={mixColors("var(--rd-attention)", "#FFFFFF", 0.65)}
+                      strokeOpacity={0.55}
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                      legendType="none"
+                      className="mbr-linha-cometa"
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </Collapse>
       </div>
 
       {modal && (
@@ -4452,8 +4671,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                         key={l.id}
                         style={{
                           background: pendente ? "var(--rd-attention-bg)" : "var(--rd-surface-2)",
-                          borderBottom: ultimo ? "none" : "1px solid var(--rd-row-border)",
-                        }}
+                          borderBottom: ultimo ? "none" : "1px solid var(--rd-row-border)" }}
                       >
                         <div onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)} className="flex items-center justify-between cursor-pointer" style={{ padding: "13px 18px" }}>
                           <div className="flex items-center min-w-0" style={{ gap: 12 }}>
@@ -4689,8 +4907,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                   borderRadius: 999,
                   willChange: "transform",
                   transform: `translateX(${viewPillRect.left}px)`,
-                  transition: "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)",
-                }}
+                  transition: "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)" }}
               />
             )}
             {[
@@ -4709,8 +4926,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                   color: view === v.id ? "#F0F5EE" : "var(--rd-text-dim)",
                   transition: "color 0.15s ease",
                   zIndex: 1,
-                  background: "none",
-                }}
+                  background: "none" }}
               >
                 {v.label}
               </button>
@@ -4734,8 +4950,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                 fontWeight: 700,
                 whiteSpace: "nowrap",
                 width: view === "lancado" ? 100 : 150,
-                transition: "width 0.32s cubic-bezier(0.22, 1, 0.36, 1)",
-              }}
+                transition: "width 0.32s cubic-bezier(0.22, 1, 0.36, 1)" }}
             >
               <Plus size={15} strokeWidth={3} style={{ flexShrink: 0 }} />
               <span key={view} className="mbr-rotulo-troca" style={{ display: "inline-block" }}>
@@ -4755,6 +4970,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           clientes={clientes}
           onConfirmar={confirmarFuturo}
           mesAtualKey={mesAtualKey}
+          lancamentos={lancamentos}
         />
       ) : (
         <>
@@ -4902,8 +5118,7 @@ function Reveal({ children, delay = 0 }) {
       style={{
         opacity: visible ? 1 : 0,
         transform: visible ? "translateY(0)" : "translateY(26px)",
-        transition: `opacity 0.55s ease ${delay}ms, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) ${delay}ms`,
-      }}
+        transition: `opacity 0.55s ease ${delay}ms, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) ${delay}ms` }}
     >
       {children}
     </div>
@@ -4990,8 +5205,7 @@ function TooltipSemDuplicata({ active, payload, label, formatter }) {
         borderRadius: 12,
         padding: "8px 12px",
         fontFamily: BODY_FONT,
-        fontSize: 12,
-      }}
+        fontSize: 12 }}
     >
       {label !== undefined && label !== null && (
         <div style={{ color: theme.text, fontWeight: 700, marginBottom: 4 }}>{label}</div>
@@ -5075,16 +5289,14 @@ function HeroStat({ label, value, format = formatCurrency, icon: Icon, accent, d
       className={`relative rounded-2xl mbr-card-lift${fill ? " h-full" : ""}${temDetalhes ? " cursor-pointer" : ""}`}
       style={{
         background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`,
-        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${accent}1F`,
-      }}
+        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${accent}1F` }}
       onMouseEnter={temDetalhes ? () => setHover(true) : undefined}
       onMouseLeave={temDetalhes ? () => setHover(false) : undefined}
       onClick={temDetalhes ? () => setFixado((v) => !v) : undefined}
     >
       <div
         className={`relative p-5 flex flex-col gap-2 min-w-0${fill ? " h-full" : ""}`}
-        style={{
-        }}
+        style={{}}
       >
         <div className="flex items-center justify-between gap-2 min-w-0">
           <span className="text-xs uppercase tracking-wide flex items-center gap-1 min-w-0" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
@@ -5125,8 +5337,7 @@ function HeroStat({ label, value, format = formatCurrency, icon: Icon, accent, d
             wordBreak: "normal",
             overflowWrap: "normal",
             whiteSpace: "normal",
-            fontVariantNumeric: "tabular-nums",
-          }}
+            fontVariantNumeric: "tabular-nums" }}
         >
           <CountUp value={value} format={(v) => (format ? format(v) : Math.round(v)).toString().replace(/ /g, " ")} />
         </span>
@@ -5186,8 +5397,7 @@ function HeroStat({ label, value, format = formatCurrency, icon: Icon, accent, d
               zIndex: 100,
               background: theme.panel,
               border: `1px solid ${theme.cardBorder}`,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-            }}
+              boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
             // clicar dentro do cartão de detalhes não deve fechar ele (o listener de
             // "tocar fora" só olha pra fora do card inteiro, isso aqui é redundante mas
             // evita o próprio clique de abrir/fechar do card pai disparar de novo
@@ -5243,8 +5453,7 @@ function AnelCometa({ cx, cy, r, clamped, color }) {
         style={{
           "--mbr-anel-fim": `${anguloFimDeg}deg`,
           transformBox: "view-box",
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
+          transformOrigin: `${cx}px ${cy}px` }}
       >
         {/* halo maior e mais claro por baixo + pontinho mais forte por cima — deixa o
             "cometa" bem mais visível do que um pontinho sozinho */}
@@ -5306,8 +5515,7 @@ function RadialStat({ label, percent, color, sublabel, bare }) {
       className="relative rounded-2xl p-5 flex items-center gap-3 min-w-0 mbr-card-lift"
       style={{
         background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`,
-        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${color}1F`,
-      }}
+        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${color}1F` }}
     >
       {conteudo}
     </div>
@@ -5442,8 +5650,7 @@ function GraficoCaixa({ data, fmt }) {
               flex: "1 1 0",
               textAlign: i === 0 ? "left" : i === data.length - 1 ? "right" : "center",
               fontWeight: i === iMostrado ? 700 : 500,
-              color: i === iMostrado ? "var(--rd-text-muted)" : "var(--rd-text-faint)",
-            }}
+              color: i === iMostrado ? "var(--rd-text-muted)" : "var(--rd-text-faint)" }}
           >
             {d.mes}
           </span>
@@ -5638,8 +5845,16 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const margemMedia12m = entradas12m > 0 ? (lucro12m / entradas12m) * 100 : 0;
 
   const contratosAtivos = motos.filter((m) => m.contratoAtual);
-  const faturamentoPrevisto = contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0);
-  const ticketMedio = contratosAtivos.length ? faturamentoPrevisto / contratosAtivos.length : 0;
+  // só entram os contratos que JÁ podem ser cobrados no mês em questão — um contrato
+  // fechado neste mês só gera cobrança no mês que vem (aluguel é pago no fim do
+  // período), e contar ele aqui inflava o previsto do mês assim que a moto era alugada
+  const contratosCobraveisNoMes = contratosAtivos.filter((m) => contratoCobraNoMes(m.contratoAtual, mesRef));
+  const faturamentoPrevisto = contratosCobraveisNoMes.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0);
+  // o ticket médio é sobre o valor dos contratos ativos (quanto vale um aluguel), não
+  // sobre o que entra neste mês — por isso continua usando todos os ativos
+  const ticketMedio = contratosAtivos.length
+    ? contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0) / contratosAtivos.length
+    : 0;
   const investimentoFrota = motos.reduce((s, m) => s + Number(m.valorCompra || 0), 0);
 
   // dia de vencimento mais próximo entre os contratos em dia — usado no cartão de
@@ -5765,8 +5980,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                   padding: "16px 18px",
                   display: "flex",
                   alignItems: "center",
-                  gap: 14,
-                }}
+                  gap: 14 }}
               >
                 <div
                   style={{
@@ -5778,8 +5992,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     alignItems: "center",
                     justifyContent: "center",
                     flex: "none",
-                    color: c.atencao ? "var(--rd-attention)" : "var(--rd-positive)",
-                  }}
+                    color: c.atencao ? "var(--rd-attention)" : "var(--rd-positive)" }}
                 >
                   <Icon size={18} strokeWidth={2.75} />
                 </div>
@@ -5801,8 +6014,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                       borderRadius: 999,
                       padding: "7px 14px",
                       flex: "none",
-                      background: "transparent",
-                    }}
+                      background: "transparent" }}
                   >
                     {c.acao}
                   </button>
@@ -5845,8 +6057,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     fontSize: 12.5,
                     fontWeight: 700,
                     color: "var(--rd-text)",
-                    animation: `${direcaoMes >= 0 ? "mbrMesEntraDireita" : "mbrMesEntraEsquerda"} 0.26s cubic-bezier(0.32, 0.72, 0, 1) both`,
-                  }}
+                    animation: `${direcaoMes >= 0 ? "mbrMesEntraDireita" : "mbrMesEntraEsquerda"} 0.26s cubic-bezier(0.32, 0.72, 0, 1) both` }}
                 >
                   {rotuloMes}
                 </span>
@@ -5863,8 +6074,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                   background: "none",
                   color: "var(--rd-text-muted)",
                   opacity: podeAvancarMes ? 1 : 0.35,
-                  cursor: podeAvancarMes ? "pointer" : "default",
-                }}
+                  cursor: podeAvancarMes ? "pointer" : "default" }}
               >
                 <ChevronRight size={15} strokeWidth={2.75} />
               </button>
@@ -5881,8 +6091,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   background: "var(--rd-brand)",
-                  color: "var(--rd-brand-light)",
-                }}
+                  color: "var(--rd-brand-light)" }}
               >
                 Atual
               </button>
@@ -5900,8 +6109,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "var(--rd-text-muted)",
-              }}
+                color: "var(--rd-text-muted)" }}
             >
               {valoresOcultos ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
@@ -5916,8 +6124,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     height: periodoPillRect.height,
                     background: "var(--rd-brand)",
                     borderRadius: 999,
-                    transition: "left 0.25s cubic-bezier(0.32, 0.72, 0, 1)",
-                  }}
+                    transition: "left 0.25s cubic-bezier(0.32, 0.72, 0, 1)" }}
                 />
               )}
               {["3m", "6m", "12m"].map((p) => (
@@ -5931,8 +6138,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     fontSize: 12,
                     fontWeight: periodoGrafico === p ? 700 : 600,
                     color: periodoGrafico === p ? "#F0F5EE" : "var(--rd-text-dim)",
-                    background: "none",
-                  }}
+                    background: "none" }}
                 >
                   {p}
                 </button>
@@ -6026,8 +6232,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                       flexDirection: "column",
                       alignItems: "center",
                       gap: 5,
-                      minWidth: 0,
-                    }}
+                      minWidth: 0 }}
                   >
                     <span className="truncate" style={{ maxWidth: "100%", fontFamily: "ui-monospace, monospace", fontSize: 11.5, fontWeight: 600, color: alugada ? "var(--rd-text)" : "var(--rd-attention)" }}>
                       {formatPlaca(m.placa)}
@@ -6106,8 +6311,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             borderRadius: 16,
             padding: "20px 22px",
             gap: 14,
-            textAlign: "left",
-          }}
+            textAlign: "left" }}
         >
           <div className="flex items-center">
             <span style={RD_LABEL}>Onde estão</span>
@@ -6123,8 +6327,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: 24,
-            }}
+              gap: 24 }}
           >
             <div className="flex flex-col items-center" style={{ gap: 4 }}>
               <span style={{ fontSize: 28, fontWeight: 700, color: "var(--rd-positive)" }}>{alugadas}</span>
@@ -6195,8 +6398,7 @@ function SeletorNivel({ value, onChange }) {
             className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left"
             style={{
               background: ativo ? `${theme.mint}1F` : theme.card2,
-              border: `1px solid ${ativo ? theme.mint : theme.cardBorder}`,
-            }}
+              border: `1px solid ${ativo ? theme.mint : theme.cardBorder}` }}
           >
             <Icon size={16} color={ativo ? theme.mint : theme.textMuted} />
             <div className="min-w-0">
@@ -6531,8 +6733,7 @@ function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
               fontSize: 13.5,
               fontFamily: "var(--rd-font)",
               marginTop: 10,
-              marginBottom: 8,
-            }}
+              marginBottom: 8 }}
             value={local.linkRastreioGeral || ""}
             onChange={(e) => setLocal((l) => ({ ...l, linkRastreioGeral: e.target.value }))}
             onBlur={() => salvarAgora(local)}
@@ -6554,8 +6755,7 @@ function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
             padding: "7px 14px",
             alignSelf: "flex-start",
             color: status.kind === "erro" ? "var(--rd-negative)" : "var(--rd-positive)",
-            background: status.kind === "erro" ? "var(--rd-attention-bg)" : "#132018",
-          }}
+            background: status.kind === "erro" ? "var(--rd-attention-bg)" : "#132018" }}
         >
           {status.text}
         </div>
@@ -6923,8 +7123,7 @@ function AppAutenticado({ perfil, onSignOut }) {
       style={{
         background: "var(--rd-shell)",
         minHeight: "100vh",
-        fontFamily: "var(--rd-font)",
-      }}
+        fontFamily: "var(--rd-font)" }}
     >
       <style>{`
         ${fontImport}
@@ -7039,8 +7238,7 @@ function AppAutenticado({ perfil, onSignOut }) {
             height: "100vh",
             background: "var(--rd-sidebar)",
             borderRight: "1px solid var(--rd-border-soft)",
-            padding: "22px 16px",
-          }}
+            padding: "22px 16px" }}
         >
           <div className="flex items-center" style={{ gap: 11, padding: "0 8px" }}>
             <MarcaMobirelli size={38} raio={11} />
@@ -7058,8 +7256,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                 letterSpacing: "0.16em",
                 textTransform: "uppercase",
                 color: "var(--rd-text-faint)",
-                padding: "0 10px 8px",
-              }}
+                padding: "0 10px 8px" }}
             >
               Operação
             </span>
@@ -7079,8 +7276,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                     background: active ? "var(--rd-brand)" : "transparent",
                     color: active ? "#F0F5EE" : "var(--rd-text-muted)",
                     fontWeight: active ? 600 : 500,
-                    textAlign: "left",
-                  }}
+                    textAlign: "left" }}
                 >
                   <Icon size={17} strokeWidth={2.75} />
                   <span style={{ fontSize: 14 }}>{t.label}</span>
@@ -7093,8 +7289,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                         color: "var(--rd-attention)",
                         background: "#2A2115",
                         borderRadius: 999,
-                        padding: "2px 8px",
-                      }}
+                        padding: "2px 8px" }}
                     >
                       {t.pendente}
                     </span>
@@ -7115,8 +7310,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                 borderRadius: 11,
                 background: tab === "config" ? "var(--rd-brand)" : "transparent",
                 color: tab === "config" ? "#F0F5EE" : "#8A9A8C",
-                textAlign: "left",
-              }}
+                textAlign: "left" }}
             >
               <Settings size={17} strokeWidth={2.75} />
               <span style={{ fontSize: 14, fontWeight: tab === "config" ? 600 : 500 }}>Ajustes</span>
@@ -7137,8 +7331,7 @@ function AppAutenticado({ perfil, onSignOut }) {
             minWidth: 0,
             display: "flex",
             flexDirection: "column",
-            ...(tab === "rastreio" ? { height: "100vh", overflow: "hidden", position: "relative" } : {}),
-          }}
+            ...(tab === "rastreio" ? { height: "100vh", overflow: "hidden", position: "relative" } : {}) }}
         >
           {/* no Rastreamento o header flutua ABSOLUTO por cima do mapa (que ocupa a
               coluna inteira, de ponta a ponta) — é isso que faz o degradê do header
@@ -7156,8 +7349,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                 position: "relative",
                 background:
                   tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0E1512", 0.92)} 0%, ${hexToRgba("#0E1512", 0.92)} 55%, ${hexToRgba("#0E1512", 0)} 100%)` : "var(--rd-shell)",
-                borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)",
-              }}
+                borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
             >
               {tab === "rastreio" && <BorraProgressiva lado="topo" />}
               <div className="flex flex-col" style={{ gap: 3 }}>
@@ -7180,8 +7372,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                 paddingTop: "calc(16px + env(safe-area-inset-top, 0px))",
                 background:
                   tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0E1512", 0.92)} 0%, ${hexToRgba("#0E1512", 0.92)} 55%, ${hexToRgba("#0E1512", 0)} 100%)` : "var(--rd-shell)",
-                borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)",
-              }}
+                borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
             >
               {tab === "rastreio" && <BorraProgressiva lado="topo" />}
               <MarcaMobirelli size={32} raio={9} />
@@ -7208,8 +7399,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                   alignItems: "center",
                   justifyContent: "center",
                   color: "var(--rd-text-muted)",
-                  flex: "none",
-                }}
+                  flex: "none" }}
               >
                 <Settings size={16} strokeWidth={2.75} />
               </button>
@@ -7232,8 +7422,7 @@ function AppAutenticado({ perfil, onSignOut }) {
               boxShadow: "0 4px 20px rgba(0,0,0,0.35)",
               fontFamily: BODY_FONT,
               fontSize: 12,
-              fontWeight: 600,
-            }}
+              fontWeight: 600 }}
           >
             <span className="truncate" style={{ flex: "1 1 auto", minWidth: 0 }}>
               Versão nova disponível
@@ -7331,8 +7520,7 @@ function AppAutenticado({ perfil, onSignOut }) {
             paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
             background:
               tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0B110E", 0)} 0%, ${hexToRgba("#0B110E", 0.94)} 45%, ${hexToRgba("#0B110E", 0.94)} 100%)` : "var(--rd-sidebar)",
-            borderTop: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)",
-          }}
+            borderTop: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
         >
           {tab === "rastreio" && <BorraProgressiva lado="base" />}
           {tabs.map((t) => {
@@ -7358,8 +7546,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                       width: 7,
                       height: 7,
                       borderRadius: 999,
-                      background: "var(--rd-attention)",
-                    }}
+                      background: "var(--rd-attention)" }}
                   />
                 ) : null}
               </button>
