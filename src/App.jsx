@@ -218,6 +218,7 @@ function custosDaMoto(moto, lancamentos) {
       data: l.data,
       descricao: l.descricao || l.categoria || "Sem descrição",
       valorGasto: l.valor,
+      doCaixa: true,
     }));
   return [...manuais, ...doCaixa].sort((a, b) => (a.data < b.data ? 1 : -1));
 }
@@ -282,6 +283,40 @@ function projecaoFuturosPorMes(futuros, meses = 12) {
 // assim a mensalidade de cada moto alugada entra automaticamente na previsão de
 // Futuros, sem precisar cadastrar de novo. Usa a data de término do contrato (se
 // tiver sido preenchida) como limite; sem data, entra como indefinido.
+// PRIMEIRA COBRANÇA de um contrato.
+//
+// O aluguel é pago no fim do período, não na entrada: quem alugou dia 4 deste mês só
+// paga dia 4 do mês QUE VEM. Então um contrato que começou neste mês ainda não gera
+// cobrança agora — e era isso que fazia o previsto do mês crescer sozinho assim que
+// uma moto nova era alugada, obrigando a ir olhar contrato por contrato pra saber o que
+// dava pra cobrar de verdade.
+//
+// Devolve a data (YYYY-MM-DD) da primeira cobrança: o dia de vencimento do contrato,
+// no mês seguinte ao do início. Sem data de início, não dá pra afirmar nada — devolve
+// null e o contrato segue valendo desde sempre, como era antes.
+function primeiraCobrancaDoContrato(contrato) {
+  const inicio = contrato?.dataInicio;
+  if (!inicio) return null;
+  const [ano, mes] = inicio.split("-").map(Number);
+  if (!ano || !mes) return null;
+  const dia = diaVencimentoDoContrato(contrato) || Number(inicio.slice(8, 10)) || 1;
+  // mês seguinte ao do início; o dia é limitado ao último dia desse mês (dia 31 em
+  // mês de 30, ou 29/30/31 em fevereiro, cairia no mês seguinte sem esse cuidado)
+  const alvo = new Date(ano, mes, 1);
+  const ultimoDia = new Date(alvo.getFullYear(), alvo.getMonth() + 1, 0).getDate();
+  const diaOk = Math.min(dia, ultimoDia);
+  return `${alvo.getFullYear()}-${String(alvo.getMonth() + 1).padStart(2, "0")}-${String(diaOk).padStart(2, "0")}`;
+}
+
+// o contrato já pode ser cobrado no mês "mesKey"? (mesKey no formato YYYY-MM)
+function contratoCobraNoMes(contrato, mesKey) {
+  const primeira = primeiraCobrancaDoContrato(contrato);
+  if (!primeira) return true;
+  if (mesKey < primeira.slice(0, 7)) return false;
+  const fim = contrato?.dataTermino;
+  return !fim || mesKey <= fim.slice(0, 7);
+}
+
 function contratosComoFuturos(motos) {
   return (motos || [])
     .filter((m) => m.contratoAtual && Number(m.contratoAtual.valorMensal) > 0)
@@ -291,8 +326,9 @@ function contratosComoFuturos(motos) {
       descricao: `Mensalidade ${formatPlaca(m.placa)}`,
       categoria: "Contrato ativo",
       valor: Number(m.contratoAtual.valorMensal) || 0,
-      vencimento: m.contratoAtual.dataInicio || todayISO(),
+      vencimento: primeiraCobrancaDoContrato(m.contratoAtual) || m.contratoAtual.dataInicio || todayISO(),
       diaVencimento: diaVencimentoDoContrato(m.contratoAtual),
+      dataInicioContrato: m.contratoAtual.dataInicio || "",
       dataTermino: m.contratoAtual.dataTermino || "",
       recorrente: true,
       pago: false,
@@ -463,29 +499,28 @@ function diaVencimentoDoContrato(contrato) {
   return null;
 }
 
-// vencido = já passou o dia de pagamento deste mês E ainda não tem nenhuma entrada
-// lançada no caixa pra essa moto depois desse vencimento — sem o segundo pedaço, o
-// pagamento continuava aparecendo como atrasado mesmo depois de lançado no Caixa
+// QUITOU o mês? Um pagamento lançado em qualquer dia do mês já quita a mensalidade
+// daquele mês. O dono lança a entrada no mês em que recebe o dinheiro, então é o mês do
+// lançamento que importa, não o dia: comparar com o dia do vencimento fazia o pagamento
+// recebido ANTES do dia (recebeu dia 5, vencimento dia 10) continuar contando como
+// atrasado — era isso que deixava a moto marcada em vermelho com o pagamento já lançado.
+// Lançamento de mês posterior também conta (pagou atrasado, mas pagou).
+const pagouNoMes = (pagamentos, mesKey) => (pagamentos || []).some((p) => (p.data || "").slice(0, 7) >= mesKey);
+
+// vencido = o mês já é cobrável, o dia de pagamento dele já passou e não existe nenhuma
+// entrada lançada no Caixa pra essa moto nesse mês
 const isContratoVencido = (contrato, pagamentos) => {
   const dia = diaVencimentoDoContrato(contrato);
   if (!dia) return false;
   const hoje = new Date();
   const hojeZero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
-  // a primeira cobrança só vence um mês depois do início do contrato — no mês em que o
-  // cliente começa a usar a moto ele ainda não paga nada, então não pode aparecer como
-  // atrasado antes do dia de cobrança do mês SEGUINTE ao início
-  if (contrato.dataInicio) {
-    const [anoInicio, mesInicio] = contrato.dataInicio.split("-").map(Number);
-    if (anoInicio && mesInicio) {
-      const primeiroVencimento = new Date(anoInicio, mesInicio, dia); // mês seguinte (mesInicio já é 1-based)
-      if (hojeZero < primeiroVencimento) return false;
-    }
-  }
+  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  // a primeira cobrança só vence um mês depois do início do contrato (aluguel é pago no
+  // fim do período) — e contrato já encerrado não vence mais nada
+  if (!contratoCobraNoMes(contrato, mesAtual)) return false;
   const vencimentoDoMes = new Date(hoje.getFullYear(), hoje.getMonth(), dia);
   if (hojeZero <= vencimentoDoMes) return false;
-  const vencimentoISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-  const jaPagou = (pagamentos || []).some((p) => p.data >= vencimentoISO);
-  return !jaPagou;
+  return !pagouNoMes(pagamentos, mesAtual);
 };
 
 const monthLabel = (key) => {
@@ -2736,6 +2771,35 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     setModal(null);
   };
 
+  // "Lançar pagamento" na moto atrasada: cria a entrada no Caixa já vinculada à moto
+  // (motoId), que é justamente o que faz ela sair de "pagamento atrasado". Antes o único
+  // caminho era ir na aba Caixa e lembrar de escolher a moto na mão — sem isso o app não
+  // liga o dinheiro a ninguém e a moto fica vermelha com o pagamento já lançado.
+  const registrarPagamento = async (moto) => {
+    const valor = Number(moto.contratoAtual?.valorMensal) || 0;
+    if (!window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)} hoje?`)) return;
+    const lancamento = {
+      id: uid(),
+      data: todayISO(),
+      tipo: "entrada",
+      natureza: "Operacional",
+      categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+      valor,
+      descricao: "",
+      forma: "",
+      motoId: moto.id,
+      parcelas: 1,
+    };
+    await persistLancamentos([...(lancamentos || []), lancamento]);
+  };
+
+  // reclassifica um gasto que já está no Caixa como manutenção — lançamentos antigos,
+  // feitos antes do campo "Moto dessa manutenção" existir, ficaram com a natureza padrão
+  // e por isso apareciam em "Custos" em vez de "Manutenções"
+  const marcarComoManutencao = async (id) => {
+    await persistLancamentos((lancamentos || []).map((l) => (l.id === id ? { ...l, natureza: "Manutenção" } : l)));
+  };
+
   const salvarCustoExtra = async (moto, custo) => {
     const lancamento = {
       id: custo.id,
@@ -2828,6 +2892,9 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
         {filtradas.map((moto) => {
           const pagamentos = pagamentosDaMoto(moto, lancamentos);
           const vencido = moto.status === "alugada" && isContratoVencido(moto.contratoAtual, pagamentos);
+          const mesAtualKey = todayISO().slice(0, 7);
+          const cobraEsteMes = moto.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+          const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentos, mesAtualKey);
           const cliente = clientes.find((c) => c.id === moto.contratoAtual?.clienteId);
           const aberto = expandido === moto.id;
           return (
@@ -2864,8 +2931,34 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     {moto.contratoAtual ? (
                       <div className="rounded-xl p-3" style={{ background: theme.card2 }}>
                         {vencido && (
-                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
-                            <AlertTriangle size={13} /> Pagamento atrasado
+                          <div className="mb-2">
+                            <div className="flex items-center gap-1.5" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
+                              <AlertTriangle size={13} /> Pagamento atrasado
+                              {diaVencimentoDoContrato(moto.contratoAtual) && ` — venceu dia ${diaVencimentoDoContrato(moto.contratoAtual)} e não tem pagamento lançado no caixa`}
+                            </div>
+                            {permissoes.podeEditar && (
+                              <button
+                                onClick={() => registrarPagamento(moto)}
+                                className="text-xs font-semibold rounded-xl px-3 py-1.5 mt-2 flex items-center gap-1"
+                                style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
+                              >
+                                <CheckCircle2 size={12} /> Lançar pagamento recebido
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {/* o contrário do atraso, pra fechar o ciclo: lançou no caixa, a moto
+                            mostra na hora que o mês está quitado */}
+                        {pagoEsteMes && (
+                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.mint, fontSize: 12, fontWeight: 600 }}>
+                            <CheckCircle2 size={13} /> Pagamento deste mês já lançado
+                          </div>
+                        )}
+                        {/* aluguel é pago no fim do período: quem alugou agora só paga no mês
+                            que vem. Sem isso a moto parecia cobrável no mês da assinatura */}
+                        {moto.status === "alugada" && !cobraEsteMes && primeiraCobrancaDoContrato(moto.contratoAtual) && (
+                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.amber, fontSize: 12, fontWeight: 600 }}>
+                            1ª cobrança em {monthLabel(primeiraCobrancaDoContrato(moto.contratoAtual).slice(0, 7))}
                           </div>
                         )}
                         <div className="flex items-center justify-between mb-1">
@@ -2876,6 +2969,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                         </div>
                         <div style={{ color: theme.textMuted, fontSize: 12 }}>
                           {moto.contratoAtual.numeroClienteMoto}º cliente · contrato nº {moto.contratoAtual.numeroContrato}
+                          {moto.contratoAtual.dataInicio && ` · alugou em ${formatDate(moto.contratoAtual.dataInicio)}`}
                           {diaVencimentoDoContrato(moto.contratoAtual) && ` · pagamento todo dia ${diaVencimentoDoContrato(moto.contratoAtual)}`}
                           {moto.contratoAtual.dataTermino && ` · até ${formatDate(moto.contratoAtual.dataTermino)}`}
                         </div>
@@ -2989,6 +3083,16 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                           </span>
                           <span className="flex items-center gap-2 flex-shrink-0">
                             <span style={{ color: theme.textMuted }}>{formatCurrency(c.valorGasto)}</span>
+                            {permissoes.podeEditar && c.doCaixa && (
+                              <button
+                                onClick={() => marcarComoManutencao(c.id)}
+                                title="Mover pra Manutenções (muda a natureza do lançamento no caixa)"
+                                className="text-xs font-semibold rounded-lg px-2 py-1"
+                                style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText, whiteSpace: "nowrap" }}
+                              >
+                                é manutenção
+                              </button>
+                            )}
                             {permissoes.podeEditar && (
                               <button
                                 onClick={() => excluirCustoExtra(moto, c.id)}
@@ -3012,7 +3116,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     </div>
                     {pagamentos.length === 0 ? (
                       <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                        Nenhum pagamento com "{formatPlaca(moto.placa)}" na categoria/descrição ainda.
+                        Nenhum pagamento lançado pra essa moto ainda — lance no Caixa escolhendo a moto,
+                        ou pelo botão de pagamento aqui em cima quando estiver atrasado.
                       </div>
                     ) : (
                       <>
@@ -3163,6 +3268,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const selecionarMoto = (id) => setForm((f) => ({ ...f, motoId: id }));
+  const ehManutencao = form.natureza === "Manutenção";
 
   // o formulário só mostra Valor/Data/Natureza/Categoria de cara — "Moto relacionada",
   // "Forma de pagamento", "Parcelas" e "Descrição" ficam atrás de "Mais opções", já
@@ -3194,13 +3300,16 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
       <FieldLabel>Natureza</FieldLabel>
       <SelectField value={form.natureza} onChange={set("natureza")} options={NATUREZAS.map((n) => ({ value: n, label: n }))} />
 
-      {/* Manutenção é o único caso em que a moto NÃO é opcional: é ela que faz o gasto
-          aparecer na ficha da moto, em "Manutenções". Escondida atrás de "Mais opções",
-          era fácil salvar uma troca de óleo sem moto (ou com a natureza padrão) e depois
-          não achar ela embaixo da moto. Aqui o campo sobe junto com a escolha. */}
-      {form.natureza === "Manutenção" && (motos || []).length > 0 && (
+      {/* Dois casos em que a moto NÃO é detalhe opcional e por isso não fica escondida
+          atrás de "Mais opções":
+          - Manutenção: é a moto que faz o gasto aparecer na ficha dela, em "Manutenções"
+            (era fácil salvar uma troca de óleo sem moto e depois não achar ela lá).
+          - Entrada: é a moto que liga o pagamento ao aluguel. Sem ela o app não tem como
+            saber de quem é o dinheiro, e a moto continuava marcada como "pagamento
+            atrasado" mesmo com o pagamento já lançado no caixa. */}
+      {(form.natureza === "Manutenção" || form.tipo === "entrada") && (motos || []).length > 0 && (
         <>
-          <FieldLabel>Moto dessa manutenção</FieldLabel>
+          <FieldLabel>{ehManutencao ? "Moto dessa manutenção" : "Moto desse pagamento"}</FieldLabel>
           <SelectField
             value={form.motoId || ""}
             onChange={(e) => selecionarMoto(e.target.value)}
@@ -3213,9 +3322,13 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
             className="text-xs -mt-2 mb-3"
             style={{ color: form.motoId ? theme.textMuted : theme.amber, fontFamily: BODY_FONT }}
           >
-            {form.motoId
-              ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
-              : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."}
+            {ehManutencao
+              ? form.motoId
+                ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
+                : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."
+              : form.motoId
+                ? "Baixa o aluguel dessa moto no mês da data abaixo — ela sai de \"pagamento atrasado\" na aba Motos e na agenda de cobranças."
+                : "Escolha a moto pra esse pagamento baixar o aluguel dela. Sem moto, ela continua marcada como \"pagamento atrasado\"."}
           </div>
         </>
       )}
@@ -3244,7 +3357,9 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
         </button>
       ) : (
         <>
-          {(motos || []).length > 0 && form.natureza !== "Manutenção" && (
+          {/* a moto já aparece lá em cima quando é manutenção ou entrada — aqui só pra
+              saída comum (combustível, despachante...), onde ela é mesmo opcional */}
+          {(motos || []).length > 0 && !ehManutencao && form.tipo !== "entrada" && (
             <>
               <FieldLabel>Moto relacionada (opcional)</FieldLabel>
               <SelectField
@@ -3565,11 +3680,12 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 }
 
-const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey }, ref) {
+const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey, lancamentos }, ref) {
   const [modal, setModal] = useState(null);
   const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
   const [verTodosFixos, setVerTodosFixos] = useState(false);
   const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
+  const [verGrafico, setVerGrafico] = useState(false);
   const [grupoAberto, setGrupoAberto] = useState(null);
   // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
   // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
@@ -3600,24 +3716,58 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   // agenda de cobrança: agrupa por dia do mês quem tem que ser cobrado — pensado pra
   // quando tiver muitas motos/clientes e ficar difícil lembrar "quem vence quando" só
   // olhando a lista corrida de contratos/recorrentes
-  const cobrancasPorDia = (() => {
-    const entradasRecorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada")];
-    const porDia = new Map();
-    entradasRecorrentes.forEach((f) => {
-      const dia = f.diaVencimento || (f.vencimento ? new Date(`${f.vencimento}T00:00:00`).getDate() : null);
+  // A agenda responde "quem eu cobro ESTE mês?". Um contrato fechado neste mês ainda não
+  // entra: o aluguel é pago no fim do período, então a 1ª cobrança dele é no mês que vem.
+  // Por isso a lista é separada em dois blocos — antes tudo aparecia junto e só dava pra
+  // saber de quem cobrar indo olhar a data de início contrato por contrato.
+  const cobrancas = (() => {
+    const hojeISO = todayISO();
+    const mesHoje = hojeISO.slice(0, 7);
+    const diaHoje = Number(hojeISO.slice(8, 10));
+    const recorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada")];
+    const agora = [];
+    const depois = [];
+    recorrentes.forEach((f) => {
+      const dia = f.diaVencimento || (f.vencimento ? Number(f.vencimento.slice(8, 10)) : null);
       if (!dia) return;
       const moto = motos?.find((m) => m.id === f.motoId);
       const cliente = moto?.contratoAtual ? clientes?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
+      const mesDaPrimeira = (f.vencimento || "").slice(0, 7);
+      const jaComecou = !mesDaPrimeira || mesDaPrimeira <= mesAtualKey;
+      // estado de cada cobrança, lido de onde o dinheiro realmente entra: pra contrato é
+      // o pagamento lançado no Caixa pra essa moto (mesmo caminho da aba Motos, então as
+      // duas telas nunca se contradizem); pra conta recorrente comum é o "confirmados"
+      // dela. Antes a agenda era só uma lista de dias, sem saber quem já pagou.
+      const recebido = jaComecou
+        ? moto
+          ? pagouNoMes(pagamentosDaMoto(moto, lancamentos), mesAtualKey)
+          : (f.confirmados || []).includes(mesAtualKey)
+        : false;
+      const atrasado = jaComecou && !recebido && mesAtualKey === mesHoje && dia < diaHoje;
       const item = {
         id: f.id,
+        dia,
         label: cliente?.nome || nomeDoFuturo(f),
         sub: moto ? formatPlaca(moto.placa) : null,
         valor: Number(f.valor) || 0,
+        desde: f.dataInicioContrato || "",
+        mesDaPrimeira,
+        recebido,
+        atrasado,
       };
-      if (!porDia.has(dia)) porDia.set(dia, []);
-      porDia.get(dia).push(item);
+      (jaComecou ? agora : depois).push(item);
     });
-    return [...porDia.entries()].sort((a, b) => a[0] - b[0]);
+    const porDia = (lista) => lista.sort((a, b) => a.dia - b.dia);
+    // o que está atrasado sobe, o que já entrou desce — é essa a ordem em que a pessoa
+    // precisa olhar a lista, não a ordem do calendário
+    const peso = (it) => (it.atrasado ? 0 : it.recebido ? 2 : 1);
+    return {
+      agora: porDia(agora).sort((a, b) => peso(a) - peso(b)),
+      depois: porDia(depois),
+      aReceber: agora.filter((it) => !it.recebido).reduce((t, it) => t + it.valor, 0),
+      recebido: agora.filter((it) => it.recebido).reduce((t, it) => t + it.valor, 0),
+      atrasadas: agora.filter((it) => it.atrasado).length,
+    };
   })();
 
   // Junta numa linha só o que é "a mesma conta repetida", pra lista não virar um
@@ -3791,122 +3941,145 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
 
   return (
     <div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-        <div className="rounded-2xl p-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            A receber (12 meses)
-          </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 20, color: theme.mint }}>{formatCurrency(previstoEntrada12Meses)}</div>
-          <div className="text-xs mt-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            fixo/mês: {formatCurrency(fixoMensalEntrada)} · avulso: {formatCurrency(avulsosPendentesEntrada)}
-          </div>
-        </div>
-        <div className="rounded-2xl p-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            A pagar (12 meses)
-          </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 20, color: theme.coral }}>{formatCurrency(previstoSaida12Meses)}</div>
-          <div className="text-xs mt-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            fixo/mês: {formatCurrency(fixoMensalSaida)} · avulso: {formatCurrency(avulsosPendentesSaida)}
-          </div>
-        </div>
-        <div className="rounded-2xl p-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            Saldo previsto (12 meses)
-          </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 20, color: saldoPrevisto12Meses >= 0 ? theme.mint : theme.coral }}>
-            {formatCurrency(saldoPrevisto12Meses)}
-          </div>
-        </div>
-      </div>
-
-      {cobrancasPorDia.length > 0 && (
+      {(cobrancas.agora.length > 0 || cobrancas.depois.length > 0) && (
         <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-3">
+          <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-1">
             Agenda de cobranças
           </h3>
-          <div className="flex flex-col">
-            {(verTodasCobrancas ? cobrancasPorDia : cobrancasPorDia.slice(0, 4)).map(([dia, itens], i) => (
-              <div
-                key={dia}
-                className="flex items-start gap-3 py-2.5"
-                style={{ borderTop: i === 0 ? "none" : `1px solid ${theme.divider}` }}
-              >
-                <div
-                  className="flex-shrink-0 flex items-center justify-center rounded-lg"
-                  style={{ width: 38, height: 38, background: theme.card2, color: theme.text, fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 13 }}
-                >
-                  {String(dia).padStart(2, "0")}
-                </div>
-                <div className="flex-1 flex flex-col gap-1 min-w-0">
-                  {itens.map((it) => (
-                    <div key={it.id} className="flex items-center justify-between gap-2 text-xs" style={{ fontFamily: BODY_FONT }}>
-                      <span className="truncate" style={{ color: theme.text }}>
-                        {it.label}
-                        {it.sub ? ` · ${it.sub}` : ""}
-                      </span>
-                      <span style={{ color: theme.mint, fontWeight: 700, flexShrink: 0 }}>{formatCurrency(it.valor)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+            Quem você cobra em {monthLabel(mesAtualKey)}
+            {cobrancas.aReceber > 0 && (
+              <>
+                {" · falta entrar "}
+                <span style={{ color: theme.text, fontWeight: 700 }}>{formatCurrency(cobrancas.aReceber)}</span>
+              </>
+            )}
+            {cobrancas.atrasadas > 0 && (
+              <span style={{ color: theme.coral, fontWeight: 700 }}>
+                {` · ${cobrancas.atrasadas} atrasad${cobrancas.atrasadas === 1 ? "a" : "as"}`}
+              </span>
+            )}
           </div>
-          {cobrancasPorDia.length > 4 && (
+
+          {cobrancas.agora.length === 0 ? (
+            <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+              Nenhuma cobrança neste mês.
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              {(verTodasCobrancas ? cobrancas.agora : cobrancas.agora.slice(0, 5)).map((it, i) => (
+                <div
+                  key={it.id}
+                  className="flex items-center gap-3 py-2.5"
+                  style={{ borderTop: i === 0 ? "none" : `1px solid ${theme.divider}`, opacity: it.recebido ? 0.55 : 1 }}
+                >
+                  <div
+                    className="flex-shrink-0 flex items-center justify-center rounded-lg"
+                    style={{
+                      width: 38,
+                      height: 38,
+                      background: theme.card2,
+                      color: it.recebido ? theme.mint : it.atrasado ? theme.coral : theme.text,
+                      fontFamily: HEAD_FONT,
+                      fontWeight: 700,
+                      fontSize: 13,
+                    }}
+                  >
+                    {String(it.dia).padStart(2, "0")}
+                  </div>
+                  <div className="flex-1 min-w-0" style={{ fontFamily: BODY_FONT }}>
+                    <div className="truncate text-xs" style={{ color: theme.text }}>{it.label}</div>
+                    {/* o estado vem do Caixa: lançou o pagamento da moto, a linha muda aqui */}
+                    <div className="text-xs" style={{ color: it.recebido ? theme.mint : it.atrasado ? theme.coral : theme.textMuted }}>
+                      {it.sub || ""}
+                      {it.recebido ? `${it.sub ? " · " : ""}já recebido` : it.atrasado ? `${it.sub ? " · " : ""}atrasado` : ""}
+                    </div>
+                  </div>
+                  <span
+                    className="text-xs flex-shrink-0"
+                    style={{ color: it.atrasado ? theme.coral : theme.mint, fontWeight: 700, fontFamily: BODY_FONT }}
+                  >
+                    {formatCurrency(it.valor)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {cobrancas.agora.length > 5 && (
             <button
               onClick={() => setVerTodasCobrancas((v) => !v)}
               className="text-xs font-semibold mt-2"
               style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
             >
-              {verTodasCobrancas ? "Ver menos" : `Ver mais (${cobrancasPorDia.length - 4})`}
+              {verTodasCobrancas ? "Ver menos" : `Ver mais (${cobrancas.agora.length - 5})`}
             </button>
+          )}
+
+          {/* contratos fechados neste mês: a 1ª cobrança cai só no mês seguinte. Aqui o
+              mês aparece de propósito, porque é justamente a informação que faltava —
+              junto com a data em que o cliente alugou, que não existia em lugar nenhum */}
+          {cobrancas.depois.length > 0 && (
+            <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${theme.divider}` }}>
+              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                Ainda não cobra
+              </div>
+              <div className="flex flex-col">
+                {cobrancas.depois.map((it, i) => (
+                  <div
+                    key={it.id}
+                    className="flex items-center gap-3 py-2.5"
+                    style={{ borderTop: i === 0 ? "none" : `1px solid ${theme.divider}` }}
+                  >
+                    <div
+                      className="flex-shrink-0 flex items-center justify-center rounded-lg"
+                      style={{ width: 38, height: 38, background: theme.card2, color: theme.amber, fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 13 }}
+                    >
+                      {String(it.dia).padStart(2, "0")}
+                    </div>
+                    <div className="flex-1 min-w-0" style={{ fontFamily: BODY_FONT }}>
+                      <div className="truncate text-xs" style={{ color: theme.text }}>{it.label}</div>
+                      <div className="text-xs" style={{ color: theme.textMuted }}>
+                        {it.sub ? `${it.sub} · ` : ""}
+                        {it.desde ? `alugou em ${formatDate(it.desde)}` : "sem data de início"}
+                      </div>
+                      <div className="text-xs" style={{ color: theme.amber }}>
+                        1ª cobrança em {monthLabel(it.mesDaPrimeira)}
+                      </div>
+                    </div>
+                    <span className="text-xs flex-shrink-0" style={{ color: theme.textMuted, fontWeight: 700, fontFamily: BODY_FONT }}>
+                      {formatCurrency(it.valor)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
 
+      {/* os três números do ano em UM cartão, em vez de três cartões com duas linhas de
+          jargão cada ("fixo/mês", "avulso") — a aba abria com quatro blocos de resumo
+          antes de mostrar qualquer conta, e era isso que fazia ela parecer cheia demais */}
       <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-        <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-3">
-          Previsão por mês
-        </h3>
-        {futuros.length === 0 ? (
-          <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            Cadastre uma conta futura pra ver a previsão aqui.
+        <div className="text-xs uppercase tracking-wide mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+          Próximos 12 meses
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <div className="text-xs mb-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>A receber</div>
+            <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: theme.mint }}>{formatCurrency(previstoEntrada12Meses)}</div>
           </div>
-        ) : (
-          <div style={{ width: "100%", height: 280 }}>
-            <ResponsiveContainer>
-              <ComposedChart data={projecao} margin={{ left: -12 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder} vertical={false} />
-                <XAxis dataKey="mes" stroke={theme.textMuted} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={theme.textMuted} fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
-                <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
-                <Legend />
-                <Bar dataKey="entrada" name="A receber" fill={theme.mint} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="saida" name="A pagar" fill={theme.coral} radius={[4, 4, 0, 0]} />
-                <Line
-                  type="monotone"
-                  dataKey="saldo"
-                  name="Saldo"
-                  stroke={theme.amber}
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: theme.amber, strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="saldo"
-                  stroke={mixColors(theme.amber, "#FFFFFF", 0.65)}
-                  strokeOpacity={0.55}
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                  legendType="none"
-                  className="mbr-linha-cometa"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
+          <div>
+            <div className="text-xs mb-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>A pagar</div>
+            <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: theme.coral }}>{formatCurrency(previstoSaida12Meses)}</div>
           </div>
-        )}
+          <div>
+            <div className="text-xs mb-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>Sobra prevista</div>
+            <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: saldoPrevisto12Meses >= 0 ? theme.mint : theme.coral }}>
+              {formatCurrency(saldoPrevisto12Meses)}
+            </div>
+          </div>
+        </div>
       </div>
 
       {recorrentes.length > 0 && (
@@ -3957,6 +4130,62 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
             )}
           </>
         )}
+      </div>
+
+      {/* o gráfico é consulta, não rotina: ocupava 280px no meio do caminho entre a
+          agenda e as contas. Fica no fim, fechado, e abre quando a pessoa quiser */}
+      <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
+        <button
+          onClick={() => setVerGrafico((v) => !v)}
+          className="w-full flex items-center justify-between"
+          style={{ minHeight: 32 }}
+        >
+          <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }}>Previsão por mês</h3>
+          {verGrafico ? <ChevronUp size={18} color={theme.textMuted} /> : <ChevronDown size={18} color={theme.textMuted} />}
+        </button>
+        <Collapse open={verGrafico}>
+          <div className="pt-3">
+            {futuros.length === 0 ? (
+              <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                Cadastre uma conta futura pra ver a previsão aqui.
+              </div>
+            ) : (
+              <div style={{ width: "100%", height: 280 }}>
+                <ResponsiveContainer>
+                  <ComposedChart data={projecao} margin={{ left: -12 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder} vertical={false} />
+                    <XAxis dataKey="mes" stroke={theme.textMuted} fontSize={11} axisLine={false} tickLine={false} />
+                    <YAxis stroke={theme.textMuted} fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
+                    <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
+                    <Legend />
+                    <Bar dataKey="entrada" name="A receber" fill={theme.mint} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="saida" name="A pagar" fill={theme.coral} radius={[4, 4, 0, 0]} />
+                    <Line
+                      type="monotone"
+                      dataKey="saldo"
+                      name="Saldo"
+                      stroke={theme.amber}
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: theme.amber, strokeWidth: 0 }}
+                      activeDot={{ r: 5 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="saldo"
+                      stroke={mixColors(theme.amber, "#FFFFFF", 0.65)}
+                      strokeOpacity={0.55}
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                      legendType="none"
+                      className="mbr-linha-cometa"
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </Collapse>
       </div>
 
       {modal && (
@@ -4462,6 +4691,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           clientes={clientes}
           onConfirmar={confirmarFuturo}
           mesAtualKey={mesAtualKey}
+          lancamentos={lancamentos}
         />
       ) : (
         <>
@@ -5257,8 +5487,16 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
 
   const taxaOcupacao = motos.length ? Math.round((alugadas / motos.length) * 100) : 0;
   const contratosAtivos = motos.filter((m) => m.contratoAtual);
-  const faturamentoPrevisto = contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0);
-  const ticketMedio = contratosAtivos.length ? faturamentoPrevisto / contratosAtivos.length : 0;
+  // só entram os contratos que JÁ podem ser cobrados no mês em questão — um contrato
+  // fechado neste mês só gera cobrança no mês que vem (aluguel é pago no fim do
+  // período), e contar ele aqui inflava o previsto do mês assim que a moto era alugada
+  const contratosCobraveisNoMes = contratosAtivos.filter((m) => contratoCobraNoMes(m.contratoAtual, mesRef));
+  const faturamentoPrevisto = contratosCobraveisNoMes.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0);
+  // o ticket médio é sobre o valor dos contratos ativos (quanto vale um aluguel), não
+  // sobre o que entra neste mês — por isso continua usando todos os ativos
+  const ticketMedio = contratosAtivos.length
+    ? contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0) / contratosAtivos.length
+    : 0;
   const investimentoFrota = motos.reduce((s, m) => s + Number(m.valorCompra || 0), 0);
 
   // inclui tanto manutenção cadastrada na própria moto quanto lançada direto no Caixa
