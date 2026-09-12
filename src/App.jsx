@@ -5515,13 +5515,14 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
     .slice(0, 5);
   const maxFaturamentoMoto = Math.max(1, ...rankingFaturamento.map((m) => m.total));
 
-  // retorno do investimento por moto — quanto já foi "recuperado" (estimado a partir do
-  // valor mensal do contrato x meses decorridos) vs quanto custou (compra + custos extras + manutenção)
+  // retorno do investimento por moto — quanto já entrou de aluguel vs o que a moto
+  // CUSTOU PRA COMPRAR, e só isso. Somar manutenção e custo extra aqui fazia a meta
+  // andar pra trás: bastava lançar uma troca de óleo pra moto ficar mais longe de se
+  // pagar do que estava ontem. Esses gastos continuam no lucro do mês pelo Caixa —
+  // o payback é a pergunta "já recuperei o dinheiro que pus na moto?"
   const retornoPorMoto = motos
     .map((m) => {
-      const custosExtrasTotal = custosDaMoto(m, lancamentos).reduce((s, c) => s + Number(c.valorGasto || 0), 0);
-      const manutencaoTotal = (m.manutencoes || []).reduce((s, x) => s + Number(x.valorGasto || 0), 0);
-      const investimentoTotal = Number(m.valorCompra || 0) + custosExtrasTotal + manutencaoTotal;
+      const investimentoTotal = Number(m.valorCompra || 0);
       const receitaMensal = m.contratoAtual ? Number(m.contratoAtual.valorMensal || 0) : 0;
 
       // recebido de verdade — soma os lançamentos de entrada que citam a placa dessa moto
@@ -5690,7 +5691,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
               )}
             </div>
             <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-              Quanto falta pra cada moto se pagar (compra + custos + manutenção), da mais perto pra mais longe.
+              Quanto falta pra cada moto devolver o valor de compra dela, da mais perto pra mais longe.
             </div>
             <div className="flex flex-col gap-3">
               {(verTodasRetorno ? paybackPorMoto : paybackPorMoto.slice(0, 8)).map((r) => {
