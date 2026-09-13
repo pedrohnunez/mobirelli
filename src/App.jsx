@@ -7591,9 +7591,9 @@ function AppAutenticado({ perfil, onSignOut }) {
 
   return (
     <div
+      className="mbr-shell"
       style={{
         background: "var(--rd-bg)",
-        minHeight: "100vh",
         fontFamily: "var(--rd-font)" }}
     >
       <style>{`
@@ -7709,29 +7709,64 @@ function AppAutenticado({ perfil, onSignOut }) {
             /* com o painel arredondado à vista, uma tela curta deixava ele terminando no
                meio do caminho, com o fundo do shell sobrando embaixo */
             min-height: calc(100vh - 20px);
+            min-height: calc(100dvh - 20px);
             border: 1px solid var(--rd-border-soft);
             overflow-x: clip;
           }
           .mbr-conteudo > div > header { border-radius: 17px 17px 0 0; }
         }
+
+        /* TELA TRAVADA — a aba ocupa exatamente a altura da janela e não rola junto
+           com o dedo. "dvh" (e não "vh") é o que faz isso valer no iPad/iPhone: no
+           Safari, 100vh é a altura SEM as barras do navegador, então o rodapé da tela
+           ficava escondido atrás da barra de baixo e a página ainda dava pra arrastar.
+           O "overflow-y: auto" é só válvula de escape pra janela baixa demais —
+           quando cabe (o caso normal), não há o que rolar. */
+        .mbr-tela-fixa {
+          height: calc(100vh - var(--mbr-margem-conteudo, 0px));
+          height: calc(100dvh - var(--mbr-margem-conteudo, 0px));
+          min-height: 0;
+        }
+        @media (min-width: 1024px) {
+          .mbr-tela-fixa-desktop {
+            height: calc(100dvh - var(--mbr-margem-conteudo, 0px));
+            min-height: 0;
+            overflow-y: auto;
+          }
+        }
+
+        /* BARRA LATERAL — mesma história do dvh: presa em 100vh, o pé da barra
+           (Ajustes e o perfil) ficava embaixo da barra do Safari, fora de alcance. */
+        .mbr-lateral {
+          height: 100vh;
+          height: 100dvh;
+          overflow-x: hidden;
+          overflow-y: auto;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .mbr-lateral::-webkit-scrollbar { display: none; }
+
+        /* o shell também em dvh: com 100vh o iPad ganhava uns pixels a mais de página
+           do que cabe na tela, e a Visão geral travada ainda balançava no dedo */
+        .mbr-shell { min-height: 100vh; min-height: 100dvh; }
       `}</style>
 
       <div style={{ display: "flex", alignItems: "flex-start" }}>
         {/* SIDEBAR — desktop ≥1024px */}
         <nav
-          className="mbr-desktop-only"
+          className="mbr-desktop-only mbr-lateral"
           style={{
             flexDirection: "column",
-            gap: 26,
+            gap: 22,
             width: larguraMenu,
             flex: "none",
             position: "sticky",
             top: 0,
-            height: "100vh",
             background: "var(--rd-sidebar)",
             borderRight: "1px solid var(--rd-border-soft)",
             padding: menuRecolhido ? "22px 10px" : "22px 16px",
-            overflow: "hidden",
+            paddingBottom: "calc(22px + env(safe-area-inset-bottom, 0px))",
             transition: "width 0.26s cubic-bezier(0.32, 0.72, 0, 1), padding 0.26s cubic-bezier(0.32, 0.72, 0, 1)" }}
         >
           <button
@@ -7845,7 +7880,10 @@ function AppAutenticado({ perfil, onSignOut }) {
             })}
           </div>
 
-          <div className="flex flex-col" style={{ gap: 3, marginTop: "auto" }}>
+          {/* Ajustes e perfil ficavam colados no pé da barra (marginTop:auto), com um
+              vazio enorme no meio — e, no iPad, escondidos atrás da barra do Safari.
+              Agora vêm logo depois do menu, sempre à vista. */}
+          <div className="flex flex-col" style={{ gap: 3, paddingTop: 4, borderTop: "1px solid var(--rd-border-soft)" }}>
             <button
               onClick={() => setTab("config")}
               data-active={tab === "config"}
@@ -7868,8 +7906,6 @@ function AppAutenticado({ perfil, onSignOut }) {
               style={{
                 gap: 10,
                 padding: 10,
-                borderTop: "1px solid var(--rd-border-soft)",
-                marginTop: 8,
                 minWidth: 0,
                 justifyContent: menuRecolhido ? "center" : "flex-start" }}
               title={menuRecolhido ? perfil?.username : undefined}
@@ -7886,15 +7922,17 @@ function AppAutenticado({ perfil, onSignOut }) {
 
         {/* COLUNA DE CONTEÚDO */}
         <div
-          className="mbr-conteudo"
+          className={
+            "mbr-conteudo" +
+            (tab === "rastreio" ? " mbr-tela-fixa" : "") +
+            (tab === "dashboard" ? " mbr-tela-fixa-desktop" : "")
+          }
           style={{
             flex: 1,
             minWidth: 0,
             display: "flex",
             flexDirection: "column",
-            ...(tab === "rastreio"
-              ? { height: "calc(100vh - var(--mbr-margem-conteudo, 0px))", overflow: "hidden", position: "relative" }
-              : {}) }}
+            ...(tab === "rastreio" ? { overflow: "hidden", position: "relative" } : {}) }}
         >
           {/* no Rastreamento o header flutua ABSOLUTO por cima do mapa (que ocupa a
               coluna inteira, de ponta a ponta) — é isso que faz o degradê do header
