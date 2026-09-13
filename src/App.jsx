@@ -25,6 +25,8 @@ import {
   Wrench,
   Trash2,
   Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
   FileText,
   Search,
   ChevronDown,
@@ -972,10 +974,10 @@ const inputStyle = {
   marginBottom: 14,
 };
 
-// input[type=date] tem um controle nativo (o ícone do calendário) que o navegador
-// desenha com um "box" próprio, maior que o de um input de texto comum, mesmo com o
-// padding igual — height explícito força os dois a ficarem do mesmo tamanho
-const dateInputStyle = { ...inputStyle, height: 43 };
+// o input de data fica do tamanho de um input de texto comum — o resto do trabalho
+// (desligar a aparência nativa do Safari, que desenha um controle bem mais alto) está
+// no index.css, porque só dá pra mexer nos pseudo-elementos -webkit- por CSS
+const dateInputStyle = { ...inputStyle, height: 41, lineHeight: "19px" };
 
 function SelectField({ value, onChange, options }) {
   return (
@@ -1997,7 +1999,10 @@ function MapToolButton({ icon: Icon, label, onClick, active }) {
   );
 }
 
-function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0 }) {
+// "mini": versão de miniatura, pro cartão "Onde estão" da Visão geral — mesmo mapa e
+// mesmos pinos, só que sem controles, sem popup, sem gestos (o cartão inteiro é um
+// atalho pra tela de Rastreamento) e atualizando com menos frequência
+function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0, mini = false }) {
   const containerRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef({});
@@ -2035,9 +2040,10 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       center: [-47.0, -22.9],
       zoom: 6,
       attributionControl: false,
+      interactive: !mini,
     });
     mapObjRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    if (!mini) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     // atribuição ao OpenStreetMap/MapLibre é exigida pela licença dos dados do mapa —
     // "compact" mantém isso, só troca a faixa cheia por um botão discreto "i"
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
@@ -2097,7 +2103,8 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
             const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(map);
             markersRef.current[chave] = { marker, placa, cor, device: d };
 
-            el.addEventListener("click", (ev) => {
+            // na miniatura o pino não abre nada — o clique é do cartão, que leva pro mapa
+            if (!mini) el.addEventListener("click", (ev) => {
               ev.stopPropagation();
               const entry = markersRef.current[chave];
               if (!entry) return;
@@ -2167,7 +2174,9 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         // ela de perto). Depois disso, só recentraliza no botão "Centralizar".
         if (!bounds.isEmpty() && primeiraCargaRef.current) {
           primeiraCargaRef.current = false;
-          if (devices.length === 1) {
+          if (mini) {
+            map.fitBounds(bounds, { padding: 34, maxZoom: 11, duration: 400 });
+          } else if (devices.length === 1) {
             map.easeTo({ center: bounds.getCenter(), zoom: 12, duration: 500 });
           } else {
             // padding maior no topo/base — os pinos têm uma etiqueta desenhada por cima
@@ -2190,7 +2199,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
 
     tickRef.current = tick;
     map.on("load", tick);
-    const interval = setInterval(tick, 20000);
+    const interval = setInterval(tick, mini ? 60000 : 20000);
 
     return () => {
       cancelled = true;
@@ -2203,7 +2212,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       mapObjRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [link, filterPlaca]);
+  }, [link, filterPlaca, mini]);
 
   const centralizar = () => {
     seguindoRef.current = null;
@@ -2245,26 +2254,39 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         "--mbr-bottom-inset": `${bottomInset}px` }}
     >
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-      <div className="absolute left-3 flex gap-3 z-10" style={{ top: 12 + topInset }}>
-        <MapToolButton icon={Crosshair} label="Centralizar" onClick={centralizar} />
-        <MapToolButton icon={Route} label="Mostrar rastro" active={mostrarRastro} onClick={alternarRastro} />
-        <MapToolButton icon={RefreshCw} label="Atualizar agora" onClick={() => tickRef.current?.()} />
-      </div>
-
-      <div
-        className="absolute left-3 rounded-xl px-3 py-2 flex flex-col gap-1 z-10"
-        style={{ bottom: 12 + bottomInset, background: hexToRgba(theme.card, 0.92), border: `1px solid ${theme.cardBorder}` }}
-      >
-        {RASTREIO_LEGENDA.map((l) => (
-          <div key={l.cor} className="flex items-center gap-1.5 text-xs" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-            <span
-              className="rounded-full flex-shrink-0"
-              style={{ width: 9, height: 9, background: RASTREIO_STATUS_COR[l.cor] }}
-            />
-            {l.label}
+      {!mini && (
+        <>
+          <div className="absolute left-3 flex gap-3 z-10" style={{ top: 12 + topInset }}>
+            <MapToolButton icon={Crosshair} label="Centralizar" onClick={centralizar} />
+            <MapToolButton icon={Route} label="Mostrar rastro" active={mostrarRastro} onClick={alternarRastro} />
+            <MapToolButton icon={RefreshCw} label="Atualizar agora" onClick={() => tickRef.current?.()} />
           </div>
-        ))}
-      </div>
+
+          <div
+            className="absolute left-3 rounded-xl px-3 py-2 flex flex-col gap-1 z-10"
+            style={{ bottom: 12 + bottomInset, background: hexToRgba(theme.card, 0.92), border: `1px solid ${theme.cardBorder}` }}
+          >
+            {RASTREIO_LEGENDA.map((l) => (
+              <div key={l.cor} className="flex items-center gap-1.5 text-xs" style={{ color: theme.text, fontFamily: BODY_FONT }}>
+                <span
+                  className="rounded-full flex-shrink-0"
+                  style={{ width: 9, height: 9, background: RASTREIO_STATUS_COR[l.cor] }}
+                />
+                {l.label}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {mini && status === "carregando" && (
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ fontSize: 12, color: "var(--rd-text-dim)", background: "var(--rd-surface-2)" }}
+        >
+          carregando o mapa...
+        </div>
+      )}
 
       {status === "erro" && (
         <div
@@ -3975,7 +3997,6 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
   const [verTodosFixos, setVerTodosFixos] = useState(false);
   const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
-  const [verGrafico, setVerGrafico] = useState(false);
   const [grupoAberto, setGrupoAberto] = useState(null);
   // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
   // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
@@ -4006,7 +4027,6 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   const { fixoMensalSaida, fixoMensalEntrada, avulsosPendentesSaida, avulsosPendentesEntrada, previstoSaida12Meses, previstoEntrada12Meses, saldoPrevisto12Meses } =
     totaisFuturos(futuros, motos);
   const contratos = contratosComoFuturos(motos);
-  const projecao = projecaoFuturosPorMes([...futuros, ...contratos], 12);
 
   const recorrentes = futuros.filter((f) => f.recorrente);
   // avulso confirmado (pago) já virou um lançamento real em "Lançado" — some daqui, não
@@ -4318,7 +4338,7 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
           {cobrancas.depois.length > 0 && (
             <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${"var(--rd-row-border)"}` }}>
               <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
-                Ainda não cobra
+                A partir do mês que vem
               </div>
               <div className="flex flex-col">
                 {cobrancas.depois.map((it, i) => (
@@ -4380,11 +4400,9 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
       </div>
 
       {recorrentes.length > 0 && (
-        <div className="mb-4">
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
-            Todo mês
-          </div>
-          <div className="flex flex-col gap-2">
+        <div className="flex flex-col" style={{ gap: 10, marginBottom: 18 }}>
+          <span style={RD_LABEL}>Todo mês</span>
+          <div className="flex flex-col" style={{ gap: 8 }}>
             {(verTodosFixos ? gruposFixos : gruposFixos.slice(0, 4)).map((g) =>
               g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
             )}
@@ -4401,17 +4419,15 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
         </div>
       )}
 
-      <div>
-        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
-          Parcelamentos
-        </div>
+      <div className="flex flex-col" style={{ gap: 10 }}>
+        <span style={RD_LABEL}>Parcelamentos</span>
         {gruposAvulsos.length === 0 ? (
           <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: `1px solid ${"var(--rd-border)"}` }}>
             Nenhum parcelamento ou conta com data marcada.
           </div>
         ) : (
           <>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col" style={{ gap: 8 }}>
               {(verTodosAvulsos ? gruposAvulsos : gruposAvulsos.slice(0, 4)).map((g) =>
                 g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
               )}
@@ -4427,62 +4443,6 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
             )}
           </>
         )}
-      </div>
-
-      {/* o gráfico é consulta, não rotina: ocupava 280px no meio do caminho entre a
-          agenda e as contas. Fica no fim, fechado, e abre quando a pessoa quiser */}
-      <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
-        <button
-          onClick={() => setVerGrafico((v) => !v)}
-          className="w-full flex items-center justify-between"
-          style={{ minHeight: 32 }}
-        >
-          <h3 style={{ fontSize: 16, color: "var(--rd-text)" }}>Previsão por mês</h3>
-          {verGrafico ? <ChevronUp size={18} color={"var(--rd-text-dim)"} /> : <ChevronDown size={18} color={"var(--rd-text-dim)"} />}
-        </button>
-        <Collapse open={verGrafico}>
-          <div className="pt-3">
-            {futuros.length === 0 ? (
-              <div className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
-                Cadastre uma conta futura pra ver a previsão aqui.
-              </div>
-            ) : (
-              <div style={{ width: "100%", height: 280 }}>
-                <ResponsiveContainer>
-                  <ComposedChart data={projecao} margin={{ left: -12 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={"var(--rd-border)"} vertical={false} />
-                    <XAxis dataKey="mes" stroke={"var(--rd-text-dim)"} fontSize={11} axisLine={false} tickLine={false} />
-                    <YAxis stroke={"var(--rd-text-dim)"} fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
-                    <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
-                    <Legend />
-                    <Bar dataKey="entrada" name="A receber" fill={"var(--rd-positive)"} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="saida" name="A pagar" fill={"var(--rd-negative)"} radius={[4, 4, 0, 0]} />
-                    <Line
-                      type="monotone"
-                      dataKey="saldo"
-                      name="Saldo"
-                      stroke={"var(--rd-attention)"}
-                      strokeWidth={2.5}
-                      dot={{ r: 3, fill: "var(--rd-attention)", strokeWidth: 0 }}
-                      activeDot={{ r: 5 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="saldo"
-                      stroke={mixColors("var(--rd-attention)", "#FFFFFF", 0.65)}
-                      strokeOpacity={0.55}
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                      legendType="none"
-                      className="mbr-linha-cometa"
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-        </Collapse>
       </div>
 
       {modal && (
@@ -5616,24 +5576,6 @@ function RadialStat({ label, percent, color, sublabel, bare }) {
 =========================================================== */
 const RD_LABEL = { fontSize: 11.5, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--rd-brand-soft)" };
 
-// "itens", quando vem, faz o valor abrir o detalhamento (o que compõe aquele número)
-// ao toque/hover — é o que devolve o "clico e vejo quais foram os gastos"
-function LegendaPonto({ cor, label, valor, itens, fmt }) {
-  const numero = <span style={{ fontSize: 14, fontWeight: 700, color: "var(--rd-text)" }}>{valor}</span>;
-  return (
-    <div className="flex items-center" style={{ gap: 9 }}>
-      <span style={{ width: 8, height: 8, borderRadius: 999, background: cor, flex: "none" }} />
-      <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)", width: 64 }}>{label}</span>
-      {itens && itens.length > 0 ? (
-        <ValorComDetalhe itens={itens} fmt={fmt}>
-          {numero}
-        </ValorComDetalhe>
-      ) : (
-        numero
-      )}
-    </div>
-  );
-}
 
 function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
   return (
@@ -5652,7 +5594,7 @@ function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
 // Ele é TOCÁVEL: passar o mouse (ou arrastar o dedo) escolhe um mês, e os números desse
 // mês aparecem escritos acima do desenho — antes o gráfico não dizia nada ao ser clicado
 // e não tinha nem o nome dos meses embaixo, então não dava pra saber o que estava vendo.
-function GraficoCaixa({ data, fmt }) {
+function GraficoCaixa({ data, fmt, detalhes, aReceber }) {
   const w = 640;
   const h = 150;
   const [iAtivo, setIAtivo] = useState(null);
@@ -5683,19 +5625,41 @@ function GraficoCaixa({ data, fmt }) {
     { key: "Saídas", rotulo: "Saiu", cor: "var(--rd-negative)" },
     { key: "Lucro", rotulo: "Sobrou", cor: "var(--rd-attention)" },
   ];
+  // o detalhamento (clicar no número e ver o que o compôs) só existe pro mês de
+  // referência — é dele que vem a lista de lançamentos
+  const noMesDeReferencia = iMostrado === data.length - 1;
 
   return (
     <div className="flex flex-col" style={{ gap: 10 }}>
-      {/* leitura do mês escolhido — é isso que faz o gráfico "responder" ao toque */}
-      <div className="flex items-center flex-wrap" style={{ gap: 14, minHeight: 20 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>{doMes.mes}</span>
-        {linhas.map((l) => (
-          <span key={l.key} className="flex items-center" style={{ gap: 6, fontSize: 12 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: l.cor, flex: "none" }} />
-            <span style={{ color: "var(--rd-text-dim)" }}>{l.rotulo}</span>
-            <span style={{ fontWeight: 700, color: "var(--rd-text)" }}>{fmt ? fmt(doMes[l.key]) : doMes[l.key]}</span>
+      {/* leitura do mês escolhido — é isso que faz o gráfico "responder" ao toque, e é a
+          ÚNICA linha de números do cartão: antes existia uma legenda separada logo acima
+          repetindo Entrou/Saiu, e as duas juntas ocupavam quatro linhas dizendo o mesmo */}
+      <div className="flex items-center flex-wrap" style={{ gap: 14, minHeight: 18 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--rd-text)" }}>{doMes.mes}</span>
+        {linhas.map((l) => {
+          const detalhe = noMesDeReferencia ? detalhes?.[l.key] : null;
+          const numero = <span style={{ fontWeight: 700, color: "var(--rd-text)" }}>{fmt ? fmt(doMes[l.key]) : doMes[l.key]}</span>;
+          return (
+            <span key={l.key} className="flex items-center" style={{ gap: 5, fontSize: 11.5, whiteSpace: "nowrap" }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: l.cor, flex: "none" }} />
+              <span style={{ color: "var(--rd-text-dim)" }}>{l.rotulo}</span>
+              {detalhe && detalhe.length > 0 ? (
+                <ValorComDetalhe itens={detalhe} fmt={fmt}>
+                  {numero}
+                </ValorComDetalhe>
+              ) : (
+                numero
+              )}
+            </span>
+          );
+        })}
+        {noMesDeReferencia && aReceber != null && (
+          <span className="flex items-center" style={{ gap: 5, fontSize: 11.5, whiteSpace: "nowrap" }}>
+            <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--rd-attention)", opacity: 0.5, flex: "none" }} />
+            <span style={{ color: "var(--rd-text-dim)" }}>A receber</span>
+            <span style={{ fontWeight: 700, color: "var(--rd-text)" }}>{fmt ? fmt(aReceber) : aReceber}</span>
           </span>
-        ))}
+        )}
       </div>
 
       <div
@@ -5819,6 +5783,14 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   };
   const noMes = (data) => data?.slice(0, 7) === mesRef;
   const rotuloMes = monthLabel(mesRef);
+  // "Caixa de setembro" — o mês por extenso no título do cartão, em vez de "Caixa de"
+  // solto com o seletor logo em seguida
+  const nomeDoMesRef = (() => {
+    const [ano, mesN] = mesRef.split("-").map(Number);
+    const nome = new Date(ano, mesN - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
+    const doAnoAtual = ano === new Date().getFullYear();
+    return doAnoAtual ? nome : `${nome} de ${ano}`;
+  })();
 
   const entradasMes = lancamentos.filter((l) => l.tipo === "entrada" && noMes(l.data)).reduce((s, l) => s + Number(l.valor), 0);
   const saidasOperacionaisMes = lancamentos
@@ -5873,30 +5845,14 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const fimAbs = refAno * 12 + (refMesNum - 1);
   const mesesDisponiveis = fimAbs - inicioAbs + 1;
 
-  const [periodoGrafico, setPeriodoGrafico] = useState("3m"); // "3m" | "6m" | "12m"
-  const periodoToggleRef = useRef(null);
-  const periodoSlotRefs = useRef({});
-  const [periodoPillRect, setPeriodoPillRect] = useState(null);
-
-  useEffect(() => {
-    const medir = () => {
-      const slot = periodoSlotRefs.current[periodoGrafico];
-      const container = periodoToggleRef.current;
-      if (!slot || !container) return;
-      const slotRect = slot.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      setPeriodoPillRect({ left: slotRect.left - containerRect.left, top: slotRect.top - containerRect.top, width: slotRect.width, height: slotRect.height });
-    };
-    medir();
-    window.addEventListener("resize", medir);
-    return () => window.removeEventListener("resize", medir);
-  }, [periodoGrafico]);
-
   const [valoresOcultos, setValoresOcultos] = useState(false);
   const fmt = valoresOcultos ? () => "R$ ••••••" : formatCurrency;
 
-  const qtdMesesAlvo = { "3m": 3, "6m": 6, "12m": 12 }[periodoGrafico] || 3;
-  const qtdMeses = Math.max(1, Math.min(qtdMesesAlvo, mesesDisponiveis));
+  // a janela do gráfico é fixa em 6 meses terminando no mês escolhido — o seletor
+  // 3m/6m/12m saiu do cabeçalho: quem manda na tela é o mês, e um controle a mais só
+  // pra mudar o tamanho da janela do gráfico não pagava o espaço que ocupava
+  const JANELA_GRAFICO_MESES = 6;
+  const qtdMeses = Math.max(1, Math.min(JANELA_GRAFICO_MESES, mesesDisponiveis));
 
   const meses = [];
   for (let i = qtdMeses - 1; i >= 0; i--) {
@@ -6121,15 +6077,17 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
       <div className="flex flex-col lg:flex-row" style={{ gap: 18 }}>
         <div
           className="flex flex-col"
-          style={{ flex: "1.35 1 380px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "22px 24px", gap: 20 }}
+          style={{ flex: "1.35 1 380px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "18px 20px", gap: 16 }}
         >
           <div className="flex items-center flex-wrap" style={{ gap: 10 }}>
-            <span style={RD_LABEL}>Caixa de</span>
+            <span style={RD_LABEL}>Caixa de {nomeDoMesRef}</span>
             {/* seletor de mês — dá pra voltar pra agosto, julho etc. e a tela inteira
-                (valores, detalhamento e gráfico) acompanha o mês escolhido */}
+                (valores, detalhamento e gráfico) acompanha o mês escolhido. Fica na
+                direita, no lugar onde antes ficava o 3m/6m/12m: trocar de mês é o que
+                se usa toda hora, o tamanho da janela do gráfico não era */}
             <div
               className="flex items-center"
-              style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
+              style={{ marginLeft: "auto", gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
             >
               <button
                 onClick={irParaMesAnterior}
@@ -6192,7 +6150,6 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
               onClick={() => setValoresOcultos((v) => !v)}
               title={valoresOcultos ? "Mostrar valores" : "Ocultar valores"}
               style={{
-                marginLeft: "auto",
                 width: 30,
                 height: 30,
                 borderRadius: 999,
@@ -6205,77 +6162,62 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             >
               {valoresOcultos ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
-            <div ref={periodoToggleRef} style={{ position: "relative", display: "flex", gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: 3 }}>
-              {periodoPillRect && (
-                <span
-                  style={{
-                    position: "absolute",
-                    left: periodoPillRect.left,
-                    top: periodoPillRect.top,
-                    width: periodoPillRect.width,
-                    height: periodoPillRect.height,
-                    background: "var(--rd-brand)",
-                    borderRadius: 999,
-                    transition: "left 0.25s cubic-bezier(0.32, 0.72, 0, 1)" }}
-                />
-              )}
-              {["3m", "6m", "12m"].map((p) => (
-                <button
-                  key={p}
-                  ref={(el) => (periodoSlotRefs.current[p] = el)}
-                  onClick={() => setPeriodoGrafico(p)}
-                  style={{
-                    position: "relative",
-                    padding: "4px 11px",
-                    fontSize: 12,
-                    fontWeight: periodoGrafico === p ? 700 : 600,
-                    color: periodoGrafico === p ? "#F0F5EE" : "var(--rd-text-dim)",
-                    background: "none" }}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
           </div>
 
-          <div className="flex items-end flex-wrap" style={{ gap: 28 }}>
-            <div className="flex flex-col" style={{ gap: 6 }}>
-              <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Resultado do mês</span>
+          {/* os três blocos (resultado, faturamento/margem e a legenda) numa faixa só.
+              Com o número a 42px nada cabia lado a lado no iPad e cada bloco caía numa
+              linha, esticando o cartão pra quase duas telas de altura. Os tamanhos agora
+              acompanham a largura (clamp), então a faixa se mantém em uma linha */}
+          <div className="flex items-end flex-wrap" style={{ gap: 20 }}>
+            <div className="flex flex-col" style={{ gap: 5, minWidth: 0 }}>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Resultado do mês</span>
               <ValorComDetalhe itens={detalhesResultado} fmt={fmt}>
-                <span style={{ fontSize: 42, fontWeight: 700, letterSpacing: "-0.035em", lineHeight: 1, color: lucroMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                <span
+                  style={{
+                    fontSize: "clamp(24px, 2.7vw, 34px)",
+                    fontWeight: 700,
+                    letterSpacing: "-0.035em",
+                    lineHeight: 1,
+                    whiteSpace: "nowrap",
+                    color: lucroMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}
+                >
                   {lucroMes < 0 ? "− " : ""}
                   {fmt(Math.abs(lucroMes))}
                 </span>
               </ValorComDetalhe>
             </div>
-            <div className="flex flex-wrap" style={{ gap: 26, paddingBottom: 6, borderLeft: "1px solid var(--rd-border)", paddingLeft: 26 }}>
-              <div className="flex flex-col" style={{ gap: 5 }}>
-                <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Faturamento</span>
+            <div className="flex flex-wrap" style={{ gap: 18, paddingBottom: 2, borderLeft: "1px solid var(--rd-border)", paddingLeft: 18 }}>
+              <div className="flex flex-col" style={{ gap: 4 }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Faturamento</span>
                 <ValorComDetalhe itens={detalhesEntradas} fmt={fmt}>
-                  <span style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>{fmt(entradasMes)}</span>
+                  <span style={{ fontSize: "clamp(15px, 1.5vw, 19px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, whiteSpace: "nowrap", color: "var(--rd-text)" }}>
+                    {fmt(entradasMes)}
+                  </span>
                 </ValorComDetalhe>
                 {deltaFaturamento != null && (
-                  <span style={{ fontSize: 12, fontWeight: 600, color: deltaFaturamento >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap", color: deltaFaturamento >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
                     {deltaFaturamento >= 0 ? "↗" : "↘"} {Math.abs(deltaFaturamento).toFixed(0)}% vs {rotuloMesAnterior}
                   </span>
                 )}
               </div>
-              <div className="flex flex-col" style={{ gap: 5 }}>
-                <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Margem de lucro</span>
-                <span style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>{margemLucro.toFixed(1)}%</span>
-                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>média 12m: {margemMedia12m.toFixed(1)}%</span>
+              <div className="flex flex-col" style={{ gap: 4 }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Margem de lucro</span>
+                <span style={{ fontSize: "clamp(15px, 1.5vw, 19px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>
+                  {margemLucro.toFixed(1)}%
+                </span>
+                <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>média 12m: {margemMedia12m.toFixed(1)}%</span>
               </div>
-            </div>
-            <div className="flex flex-col" style={{ gap: 10, paddingBottom: 4 }}>
-              <LegendaPonto cor="var(--rd-positive)" label="Entrou" valor={fmt(entradasMes)} itens={detalhesEntradas} fmt={fmt} />
-              <LegendaPonto cor="var(--rd-negative)" label="Saiu" valor={fmt(saidasMes)} itens={detalhesSaidas} fmt={fmt} />
-              <LegendaPonto cor="var(--rd-attention)" label="A receber" valor={fmt(aReceberMes)} />
             </div>
           </div>
 
-          {/* o próprio gráfico já nomeia e mostra os valores das três linhas do mês
-              escolhido, então não repetimos uma legenda solta aqui embaixo */}
-          <GraficoCaixa data={chartData} fmt={fmt} />
+          {/* a leitura dos números do mês (com o detalhamento de Entrou/Saiu ao toque)
+              é a linha do próprio gráfico — ver GraficoCaixa */}
+          <GraficoCaixa
+            data={chartData}
+            fmt={fmt}
+            detalhes={{ Entradas: detalhesEntradas, "Saídas": detalhesSaidas, Lucro: detalhesResultado }}
+            aReceber={aReceberMes}
+          />
 
           <div className="flex items-center flex-wrap" style={{ gap: 20 }}>
             <span style={{ fontSize: 12, color: "var(--rd-text-faint)" }}>toque no gráfico pra ver mês a mês</span>
@@ -6287,7 +6229,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
 
         <div
           className="flex flex-col"
-          style={{ flex: "1 1 280px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "22px 24px", gap: 18 }}
+          style={{ flex: "1 1 280px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "18px 20px", gap: 15 }}
         >
           <div className="flex items-center">
             <span style={RD_LABEL}>Frota agora</span>
@@ -6319,11 +6261,11 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                       background: alugada ? "var(--rd-brand)" : "var(--rd-attention-bg-2)",
                       border: alugada ? "none" : "1px solid var(--rd-attention-border)",
                       borderRadius: 10,
-                      padding: "11px 8px",
+                      padding: "8px 7px",
                       display: "flex",
                       flexDirection: "column",
                       alignItems: "center",
-                      gap: 5,
+                      gap: 3,
                       minWidth: 0 }}
                   >
                     <span className="truncate" style={{ maxWidth: "100%", fontFamily: "ui-monospace, monospace", fontSize: 11.5, fontWeight: 600, color: alugada ? "var(--rd-text)" : "var(--rd-attention)" }}>
@@ -6370,7 +6312,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
       <div className="flex flex-col lg:flex-row" style={{ gap: 18 }}>
         <div
           className="flex flex-col"
-          style={{ flex: "1 1 260px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "20px 22px", gap: 14 }}
+          style={{ flex: "1 1 260px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "17px 19px", gap: 12 }}
         >
           <span style={RD_LABEL}>Próximos 7 dias</span>
           {itens7d.length === 0 ? (
@@ -6392,8 +6334,13 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
           )}
         </div>
 
-        <button
+        {/* mapa de verdade, não um par de contadores: é ele que responde "onde estão"
+            de bater o olho. O cartão inteiro é o atalho pra tela de Rastreamento */}
+        <div
           onClick={() => onIrPara?.("rastreio")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onIrPara?.("rastreio")}
           className="flex flex-col"
           style={{
             flex: "1 1 260px",
@@ -6401,41 +6348,45 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             background: "var(--rd-surface)",
             border: "1px solid var(--rd-border)",
             borderRadius: 16,
-            padding: "20px 22px",
-            gap: 14,
-            textAlign: "left" }}
+            padding: "17px 19px",
+            gap: 12,
+            textAlign: "left",
+            cursor: "pointer" }}
         >
           <div className="flex items-center">
             <span style={RD_LABEL}>Onde estão</span>
             <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--rd-text-dim)" }}>ver mapa ›</span>
           </div>
-          <div
-            style={{
-              flex: 1,
-              minHeight: 132,
-              borderRadius: 12,
-              background: "var(--rd-surface-2)",
-              border: "1px solid var(--rd-border-soft)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 24 }}
-          >
-            <div className="flex flex-col items-center" style={{ gap: 4 }}>
-              <span style={{ fontSize: 28, fontWeight: 700, color: "var(--rd-positive)" }}>{alugadas}</span>
-              <span style={{ fontSize: 11, color: "var(--rd-text-dim)" }}>rodando</span>
-            </div>
-            <div style={{ width: 1, height: 36, background: "var(--rd-border)" }} />
-            <div className="flex flex-col items-center" style={{ gap: 4 }}>
-              <span style={{ fontSize: 28, fontWeight: 700, color: "var(--rd-attention)" }}>{disponiveis}</span>
-              <span style={{ fontSize: 11, color: "var(--rd-text-dim)" }}>paradas</span>
+          <div style={{ flex: 1, minHeight: 132, borderRadius: 12, overflow: "hidden", border: "1px solid var(--rd-border-soft)", position: "relative" }}>
+            <TrackingMap
+              mini
+              link={config?.linkRastreioGeral || LINK_RASTREIO_PADRAO}
+              motos={motos}
+              clientes={clientes}
+              height="100%"
+              rounded={false}
+            />
+            <div
+              className="absolute flex items-center"
+              style={{
+                left: 10,
+                bottom: 10,
+                gap: 10,
+                borderRadius: 999,
+                padding: "5px 12px",
+                background: "rgba(14, 21, 18, 0.86)",
+                border: "1px solid var(--rd-border)",
+                pointerEvents: "none" }}
+            >
+              <span style={{ fontSize: 11.5, color: "var(--rd-positive)", fontWeight: 700 }}>{alugadas} em movimento</span>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{disponiveis} paradas</span>
             </div>
           </div>
-        </button>
+        </div>
 
         <div
           className="flex flex-col"
-          style={{ flex: "0.8 1 220px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "20px 22px", gap: 16 }}
+          style={{ flex: "0.8 1 220px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "17px 19px", gap: 14 }}
         >
           <span style={RD_LABEL}>Do começo</span>
           <div className="flex flex-col" style={{ gap: 13 }}>
@@ -7203,6 +7154,25 @@ function AppAutenticado({ perfil, onSignOut }) {
     { id: "fluxo", label: "Caixa", labelMobile: "Caixa", icon: Wallet },
     { id: "rastreio", label: "Rastreamento", labelMobile: "Mapa", icon: Navigation },
   ];
+  // MENU RECOLHÍVEL — a barra lateral come 232px de largura o tempo todo; recolhida ela
+  // vira um trilho fino só de ícones (continua navegável) e devolve esse espaço pro
+  // conteúdo. A escolha fica lembrada entre sessões.
+  const [menuRecolhido, setMenuRecolhido] = useState(() => {
+    try {
+      return localStorage.getItem("mobirelli-menu-recolhido") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mobirelli-menu-recolhido", menuRecolhido ? "1" : "0");
+    } catch {
+      /* navegador sem storage (aba privada) — o menu só não lembra da escolha */
+    }
+  }, [menuRecolhido]);
+  const larguraMenu = menuRecolhido ? 62 : 232;
+
   const abaAtual = tabs.find((t) => t.id === tab);
   const tituloTela = abaAtual ? abaAtual.label : "Ajustes";
   const dataCabecalho = useMemo(() => {
@@ -7213,7 +7183,7 @@ function AppAutenticado({ perfil, onSignOut }) {
   return (
     <div
       style={{
-        background: "var(--rd-shell)",
+        background: "var(--rd-bg)",
         minHeight: "100vh",
         fontFamily: "var(--rd-font)" }}
     >
@@ -7314,6 +7284,25 @@ function AppAutenticado({ perfil, onSignOut }) {
         }
         .mbr-filtros::-webkit-scrollbar { display: none; }
         .mbr-filtros > button { flex: none; white-space: nowrap; }
+
+        /* COLUNA DE CONTEÚDO — no desktop ela flutua como um painel de canto
+           arredondado sobre o fundo do shell, em vez de encostar nas bordas da tela.
+           No celular continua de ponta a ponta (não sobra largura pra desperdiçar).
+           O arredondamento vai no elemento, não num overflow:hidden, porque
+           overflow em ancestral quebra o position:sticky do cabeçalho. */
+        .mbr-conteudo { background: var(--rd-shell); --mbr-margem-conteudo: 0px; }
+        .mbr-conteudo > div > header:first-of-type,
+        .mbr-conteudo > div > header { border-radius: 0; }
+        @media (min-width: 1024px) {
+          .mbr-conteudo {
+            --mbr-margem-conteudo: 20px;
+            border-radius: 18px;
+            margin: 10px 10px 10px 0;
+            border: 1px solid var(--rd-border-soft);
+            overflow-x: clip;
+          }
+          .mbr-conteudo > div > header { border-radius: 17px 17px 0 0; }
+        }
       `}</style>
 
       <div style={{ display: "flex", alignItems: "flex-start" }}>
@@ -7323,35 +7312,72 @@ function AppAutenticado({ perfil, onSignOut }) {
           style={{
             flexDirection: "column",
             gap: 26,
-            width: 232,
+            width: larguraMenu,
             flex: "none",
             position: "sticky",
             top: 0,
             height: "100vh",
             background: "var(--rd-sidebar)",
             borderRight: "1px solid var(--rd-border-soft)",
-            padding: "22px 16px" }}
+            padding: menuRecolhido ? "22px 10px" : "22px 16px",
+            overflow: "hidden",
+            transition: "width 0.26s cubic-bezier(0.32, 0.72, 0, 1), padding 0.26s cubic-bezier(0.32, 0.72, 0, 1)" }}
         >
-          <div className="flex items-center" style={{ gap: 11, padding: "0 8px" }}>
-            <MarcaMobirelli size={38} raio={11} />
-            <div className="flex flex-col" style={{ gap: 3 }}>
-              <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>mobirelli</span>
-              <LinhaMarca />
-            </div>
-          </div>
+          <button
+            onClick={() => setMenuRecolhido((v) => !v)}
+            title={menuRecolhido ? "Abrir o menu" : "Recolher o menu"}
+            aria-label={menuRecolhido ? "Abrir o menu" : "Recolher o menu"}
+            className="flex items-center"
+            style={{ gap: 11, padding: menuRecolhido ? 0 : "0 8px", background: "none", justifyContent: menuRecolhido ? "center" : "flex-start" }}
+          >
+            <MarcaMobirelli size={menuRecolhido ? 34 : 38} raio={menuRecolhido ? 10 : 11} />
+            {!menuRecolhido && (
+              <div className="flex flex-col" style={{ gap: 3, textAlign: "left" }}>
+                <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>mobirelli</span>
+                <LinhaMarca />
+              </div>
+            )}
+            {!menuRecolhido && (
+              <PanelLeftClose size={16} strokeWidth={2.5} color="var(--rd-text-faint)" style={{ marginLeft: "auto" }} />
+            )}
+          </button>
+
+          {/* recolhido, a logo já abre o menu — mas ninguém adivinha isso, então fica um
+              botãozinho explícito logo abaixo dela */}
+          {menuRecolhido && (
+            <button
+              onClick={() => setMenuRecolhido(false)}
+              title="Abrir o menu"
+              aria-label="Abrir o menu"
+              className="flex items-center justify-center"
+              style={{
+                marginTop: -14,
+                alignSelf: "center",
+                width: 30,
+                height: 26,
+                borderRadius: 9,
+                background: "var(--rd-surface)",
+                border: "1px solid var(--rd-border)",
+                color: "var(--rd-text-faint)" }}
+            >
+              <PanelLeftOpen size={15} strokeWidth={2.5} />
+            </button>
+          )}
 
           <div className="flex flex-col" style={{ gap: 3 }}>
-            <span
-              style={{
-                fontSize: 10.5,
-                fontWeight: 700,
-                letterSpacing: "0.16em",
-                textTransform: "uppercase",
-                color: "var(--rd-text-faint)",
-                padding: "0 10px 8px" }}
-            >
-              Operação
-            </span>
+            {!menuRecolhido && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  color: "var(--rd-text-faint)",
+                  padding: "0 10px 8px" }}
+              >
+                Operação
+              </span>
+            )}
             {tabs.map((t) => {
               const Icon = t.icon;
               const active = tab === t.id;
@@ -7360,6 +7386,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                   key={t.id}
                   onClick={() => setTab(t.id)}
                   data-active={active}
+                  title={menuRecolhido ? t.label : undefined}
                   className="mbr-nav-item flex items-center"
                   style={{
                     gap: 11,
@@ -7368,23 +7395,39 @@ function AppAutenticado({ perfil, onSignOut }) {
                     background: active ? "var(--rd-brand)" : "transparent",
                     color: active ? "#F0F5EE" : "var(--rd-text-muted)",
                     fontWeight: active ? 600 : 500,
-                    textAlign: "left" }}
+                    textAlign: "left",
+                    justifyContent: menuRecolhido ? "center" : "flex-start",
+                    position: "relative" }}
                 >
-                  <Icon size={17} strokeWidth={2.75} />
-                  <span style={{ fontSize: 14 }}>{t.label}</span>
+                  <Icon size={17} strokeWidth={2.75} style={{ flex: "none" }} />
+                  {!menuRecolhido && <span style={{ fontSize: 14 }}>{t.label}</span>}
                   {t.pendente ? (
-                    <span
-                      style={{
-                        marginLeft: "auto",
-                        fontSize: 11.5,
-                        fontWeight: 700,
-                        color: "var(--rd-attention)",
-                        background: "#2A2115",
-                        borderRadius: 999,
-                        padding: "2px 8px" }}
-                    >
-                      {t.pendente}
-                    </span>
+                    menuRecolhido ? (
+                      /* recolhido não cabe o número — vira um pontinho no canto do ícone */
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: 7,
+                          right: 9,
+                          width: 7,
+                          height: 7,
+                          borderRadius: 999,
+                          background: "var(--rd-attention)" }}
+                      />
+                    ) : (
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          color: "var(--rd-attention)",
+                          background: "#2A2115",
+                          borderRadius: 999,
+                          padding: "2px 8px" }}
+                      >
+                        {t.pendente}
+                      </span>
+                    )
                   ) : null}
                 </button>
               );
@@ -7395,6 +7438,7 @@ function AppAutenticado({ perfil, onSignOut }) {
             <button
               onClick={() => setTab("config")}
               data-active={tab === "config"}
+              title={menuRecolhido ? "Ajustes" : undefined}
               className="mbr-nav-item flex items-center"
               style={{
                 gap: 11,
@@ -7402,28 +7446,44 @@ function AppAutenticado({ perfil, onSignOut }) {
                 borderRadius: 11,
                 background: tab === "config" ? "var(--rd-brand)" : "transparent",
                 color: tab === "config" ? "#F0F5EE" : "#8A9A8C",
-                textAlign: "left" }}
+                textAlign: "left",
+                justifyContent: menuRecolhido ? "center" : "flex-start" }}
             >
-              <Settings size={17} strokeWidth={2.75} />
-              <span style={{ fontSize: 14, fontWeight: tab === "config" ? 600 : 500 }}>Ajustes</span>
+              <Settings size={17} strokeWidth={2.75} style={{ flex: "none" }} />
+              {!menuRecolhido && <span style={{ fontSize: 14, fontWeight: tab === "config" ? 600 : 500 }}>Ajustes</span>}
             </button>
-            <div className="flex items-center" style={{ gap: 10, padding: 10, borderTop: "1px solid var(--rd-border-soft)", marginTop: 8, minWidth: 0 }}>
+            <div
+              className="flex items-center"
+              style={{
+                gap: 10,
+                padding: 10,
+                borderTop: "1px solid var(--rd-border-soft)",
+                marginTop: 8,
+                minWidth: 0,
+                justifyContent: menuRecolhido ? "center" : "flex-start" }}
+              title={menuRecolhido ? perfil?.username : undefined}
+            >
               <AvatarIniciais username={perfil?.username} />
-              <span className="truncate" style={{ fontSize: 13, fontWeight: 500, color: "var(--rd-text-muted)" }}>
-                {perfil?.username}
-              </span>
+              {!menuRecolhido && (
+                <span className="truncate" style={{ fontSize: 13, fontWeight: 500, color: "var(--rd-text-muted)" }}>
+                  {perfil?.username}
+                </span>
+              )}
             </div>
           </div>
         </nav>
 
         {/* COLUNA DE CONTEÚDO */}
         <div
+          className="mbr-conteudo"
           style={{
             flex: 1,
             minWidth: 0,
             display: "flex",
             flexDirection: "column",
-            ...(tab === "rastreio" ? { height: "100vh", overflow: "hidden", position: "relative" } : {}) }}
+            ...(tab === "rastreio"
+              ? { height: "calc(100vh - var(--mbr-margem-conteudo, 0px))", overflow: "hidden", position: "relative" }
+              : {}) }}
         >
           {/* no Rastreamento o header flutua ABSOLUTO por cima do mapa (que ocupa a
               coluna inteira, de ponta a ponta) — é isso que faz o degradê do header
