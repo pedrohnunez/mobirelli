@@ -4722,7 +4722,26 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     mesesComLancamentos.find((m) => m <= mesAtualKey) ||
     mesesOrdenados[0] ||
     null;
-  const [expandido, setExpandido] = useState(mesInicial);
+  // A aba Lançado mostra UM mês por vez. Antes listava todos os meses empilhados, cada
+  // um com seu resumo: virava um paredão de informação pra achar o mês que interessa.
+  const [mesVisivel, setMesVisivel] = useState(mesInicial || mesAtualKey);
+  const mesesReais = mesesOrdenados.filter((m) => m !== "sem-data");
+  const mesMaisAntigo = mesesReais[mesesReais.length - 1] || mesAtualKey;
+  const mesMaisNovo = mesesReais[0] && mesesReais[0] > mesAtualKey ? mesesReais[0] : mesAtualKey;
+  const mesVizinho = (passo) => {
+    const [ano, mesN] = (mesVisivel || mesAtualKey).split("-").map(Number);
+    const d = new Date(ano, mesN - 1 + passo, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const podeVoltarMes = mesVisivel > mesMaisAntigo;
+  const podeAvancarMes = mesVisivel < mesMaisNovo;
+  // os números e a lista do mês que está na tela (lançado + o que ainda está previsto)
+  const lancadosDoMes = porMes[mesVisivel] || [];
+  const previstosDoMes = pendenciasPorMes[mesVisivel] || [];
+  const itensDoMes = [...lancadosDoMes, ...previstosDoMes].sort((a, b) => (a.data < b.data ? 1 : -1));
+  const entradaDoMes = lancadosDoMes.filter((l) => l.tipo === "entrada").reduce((s2, l) => s2 + Number(l.valor), 0);
+  const saidaDoMes = lancadosDoMes.filter((l) => l.tipo === "saida").reduce((s2, l) => s2 + Number(l.valor), 0);
+  const saldoDoMes = entradaDoMes - saidaDoMes;
   const [detalheAberto, setDetalheAberto] = useState(null);
   const [grupoLancAberto, setGrupoLancAberto] = useState(null);
 
@@ -4929,7 +4948,6 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     );
   };
 
-  const [verTodosResumo, setVerTodosResumo] = useState(false);
   const [view, setView] = useState("lancado");
   const futurosViewRef = useRef(null);
 
@@ -5051,92 +5069,95 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       )}
 
       {ordenados.length > 0 && (
-        <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "20px 22px" }}>
-          <span style={{ ...RD_LABEL, display: "block", marginBottom: 12 }}>Resumo mensal</span>
-          <div className="flex flex-col" style={{ gap: 8 }}>
-            {(verTodosResumo ? mesesComLancamentos : mesesComLancamentos.slice(0, 1)).map((mesKey) => {
-              const itensResumo = porMes[mesKey];
-              const entradaResumo = itensResumo.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
-              const saidaResumo = itensResumo.filter((l) => l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0);
-              const saldoResumo = entradaResumo - saidaResumo;
-              return (
-                <div key={mesKey} className="rounded-xl" style={{ background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", padding: "10px 14px" }}>
-                  <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, marginBottom: 6 }}>
-                    <span style={{ color: "var(--rd-text)", fontWeight: 700, fontSize: 14 }}>
-                      {mesKey === "sem-data" ? "Sem data" : monthLabel(mesKey)}
-                    </span>
-                    <span style={{ color: saldoResumo >= 0 ? "var(--rd-positive)" : "var(--rd-negative)", fontWeight: 700, fontSize: 14 }}>
-                      Saldo: {formatCurrency(saldoResumo)}
-                    </span>
-                  </div>
-                  <div className="flex items-center flex-wrap" style={{ gap: 16, fontSize: 12, color: "var(--rd-text-dim)" }}>
-                    <span>
-                      Entradas <b style={{ color: "var(--rd-positive)" }}>{formatCurrency(entradaResumo)}</b>
-                    </span>
-                    <span>
-                      Saídas <b style={{ color: "var(--rd-negative)" }}>{formatCurrency(saidaResumo)}</b>
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {mesesComLancamentos.length > 1 && (
-            <button
-              onClick={() => setVerTodosResumo((v) => !v)}
-              style={{ color: "var(--rd-brand-light)", fontSize: 12.5, fontWeight: 700, marginTop: 10, minHeight: 32, background: "none" }}
-            >
-              {verTodosResumo ? "Ver menos" : `Ver mais (${mesesComLancamentos.length - 1})`}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col" style={{ gap: 10 }}>
-        {mesesOrdenados.map((mesKey) => {
-          const itensReais = porMes[mesKey] || [];
-          const pendentesDoMes = pendenciasPorMes[mesKey] || [];
-          const itens = [...itensReais, ...pendentesDoMes].sort((a, b) => (a.data < b.data ? 1 : -1));
-          const totalEntrada = itensReais.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
-          const totalSaida = itensReais.filter((l) => l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0);
-          const saldo = totalEntrada - totalSaida;
-          const aberto = expandido === mesKey;
-          return (
-            <div key={mesKey} className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
-              <button className="w-full flex items-center justify-between text-left" onClick={() => setExpandido(aberto ? null : mesKey)} style={{ padding: "16px 18px" }}>
-                <div>
-                  <div style={{ fontSize: 14.5, fontWeight: 700, color: "var(--rd-text)" }}>{mesKey === "sem-data" ? "Sem data" : monthLabel(mesKey)}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
-                    {itensReais.length} lançamento{itensReais.length === 1 ? "" : "s"}
-                    {pendentesDoMes.length > 0 && (
-                      <span style={{ color: "var(--rd-attention)" }}>
-                        {" "}
-                        · {pendentesDoMes.length} previsto{pendentesDoMes.length === 1 ? "" : "s"}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center" style={{ gap: 10 }}>
-                  <span style={{ color: saldo >= 0 ? "var(--rd-positive)" : "var(--rd-negative)", fontWeight: 700, fontSize: 15 }}>{formatCurrency(saldo)}</span>
-                  {aberto ? <ChevronUp size={18} color="var(--rd-text-dim)" /> : <ChevronDown size={18} color="var(--rd-text-dim)" />}
-                </div>
-              </button>
-
-              <Collapse open={aberto}>
-                <div style={{ borderTop: `1px solid ${theme.divider}` }}>
-                  {agruparLancamentos(itens).map((g, gi, arr) =>
-                    g.itens.length === 1 ? (
-                      <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
-                    ) : (
-                      <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
-                    )
-                  )}
-                </div>
-              </Collapse>
+        <>
+          {/* UM MÊS POR VEZ. O resumo é só do mês escolhido, e as setas andam de mês em
+              mês — antes a tela empilhava o resumo e a lista de TODOS os meses de uma
+              vez, o que é informação demais pra achar o que interessa */}
+          <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "14px 18px" }}>
+            <div className="flex items-center flex-wrap" style={{ gap: 12 }}>
+              <div
+                className="flex items-center"
+                style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
+              >
+                <button
+                  onClick={() => podeVoltarMes && setMesVisivel(mesVizinho(-1))}
+                  disabled={!podeVoltarMes}
+                  aria-label="Mês anterior"
+                  className="flex items-center justify-center"
+                  style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeVoltarMes ? 1 : 0.35 }}
+                >
+                  <ChevronLeft size={15} strokeWidth={2.75} />
+                </button>
+                <span className="text-center" style={{ minWidth: 62, fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>
+                  {monthLabel(mesVisivel)}
+                </span>
+                <button
+                  onClick={() => podeAvancarMes && setMesVisivel(mesVizinho(1))}
+                  disabled={!podeAvancarMes}
+                  aria-label="Próximo mês"
+                  className="flex items-center justify-center"
+                  style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeAvancarMes ? 1 : 0.35 }}
+                >
+                  <ChevronRight size={15} strokeWidth={2.75} />
+                </button>
+              </div>
+              {mesVisivel !== mesAtualKey && (
+                <button
+                  onClick={() => setMesVisivel(mesAtualKey)}
+                  style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "4px 11px", background: "var(--rd-brand)", color: "var(--rd-brand-light)" }}
+                >
+                  Atual
+                </button>
+              )}
+              <div className="flex items-center flex-wrap" style={{ gap: 16, marginLeft: "auto", fontSize: 12.5 }}>
+                <span style={{ color: "var(--rd-text-dim)" }}>
+                  Entrou <b style={{ color: "var(--rd-positive)" }}>{formatCurrency(entradaDoMes)}</b>
+                </span>
+                <span style={{ color: "var(--rd-text-dim)" }}>
+                  Saiu <b style={{ color: "var(--rd-negative)" }}>{formatCurrency(saidaDoMes)}</b>
+                </span>
+                <span style={{ color: "var(--rd-text-dim)" }}>
+                  Saldo{" "}
+                  <b style={{ color: saldoDoMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>{formatCurrency(saldoDoMes)}</b>
+                </span>
+              </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+
+          <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            {itensDoMes.length === 0 ? (
+              <div className="p-6 text-center" style={{ color: "var(--rd-text-dim)", fontSize: 13 }}>
+                Nenhum lançamento em {monthLabel(mesVisivel)}.
+              </div>
+            ) : (
+              agruparLancamentos(itensDoMes).map((g, gi, arr) =>
+                g.itens.length === 1 ? (
+                  <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
+                ) : (
+                  <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
+                )
+              )
+            )}
+          </div>
+
+          {/* lançamentos sem data não pertencem a mês nenhum — ficam num bloco à parte
+              em vez de sumir da tela */}
+          {(porMes["sem-data"] || []).length > 0 && (
+            <div className="flex flex-col" style={{ gap: 10 }}>
+              <span style={RD_LABEL}>Sem data</span>
+              <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+                {agruparLancamentos(porMes["sem-data"]).map((g, gi, arr) =>
+                  g.itens.length === 1 ? (
+                    <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
+                  ) : (
+                    <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
+                  )
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {modal && (
         <LancamentoModal
@@ -5641,9 +5662,9 @@ const RD_LABEL = { fontSize: 11.5, fontWeight: 700, letterSpacing: "0.16em", tex
 
 function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
   return (
-    <div className="flex flex-col" style={{ gap: 2 }}>
-      <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>{label}</span>
-      <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em", color: cor }}>{valor}</span>
+    <div className="flex flex-col" style={{ gap: 1 }}>
+      <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{label}</span>
+      <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: cor }}>{valor}</span>
     </div>
   );
 }
@@ -5656,10 +5677,31 @@ function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
 // Ele é TOCÁVEL: passar o mouse (ou arrastar o dedo) escolhe um mês, e os números desse
 // mês aparecem escritos acima do desenho — antes o gráfico não dizia nada ao ser clicado
 // e não tinha nem o nome dos meses embaixo, então não dava pra saber o que estava vendo.
-function GraficoCaixa({ data, fmt, detalhes, aReceber }) {
+// O mês escolhido no gráfico é controlado de fora (iAtivo/onAtivo): é a legenda do
+// cartão, e não o gráfico, que mostra os valores — clicar aqui muda os números de lá
+// uma linha da legenda de valores: bolinha + rótulo + número. Com "itens", o número
+// abre o detalhamento (o que compôs aquele total) — é o "clico e vejo os gastos"
+function LegendaPonto({ cor, label, valor, itens, fmt }) {
+  const numero = <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>{valor}</span>;
+  return (
+    <div className="flex items-center" style={{ gap: 8, whiteSpace: "nowrap" }}>
+      <span style={{ width: 8, height: 8, borderRadius: 999, background: cor, flex: "none" }} />
+      <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>{label}</span>
+      {itens && itens.length > 0 ? (
+        <ValorComDetalhe itens={itens} fmt={fmt}>
+          {numero}
+        </ValorComDetalhe>
+      ) : (
+        numero
+      )}
+    </div>
+  );
+}
+
+function GraficoCaixa({ data, altura = 94, iAtivo, onAtivo, rodape }) {
   const w = 640;
-  const h = 150;
-  const [iAtivo, setIAtivo] = useState(null);
+  const h = altura;
+  const setIAtivo = onAtivo || (() => {});
   if (!data.length) return <div style={{ height: h }} />;
 
   const vals = data.flatMap((d) => [d.Entradas, d.Saídas, d.Lucro]);
@@ -5683,51 +5725,20 @@ function GraficoCaixa({ data, fmt, detalhes, aReceber }) {
   };
 
   const linhas = [
-    { key: "Entradas", rotulo: "Entrou", cor: "var(--rd-positive)" },
-    { key: "Saídas", rotulo: "Saiu", cor: "var(--rd-negative)" },
-    { key: "Lucro", rotulo: "Sobrou", cor: "var(--rd-attention)" },
+    { key: "Entradas", rotulo: "Entradas", cor: "var(--rd-positive)" },
+    { key: "Saídas", rotulo: "Saídas", cor: "var(--rd-negative)" },
+    { key: "Lucro", rotulo: "Lucro", cor: "var(--rd-attention)" },
   ];
-  // o detalhamento (clicar no número e ver o que o compôs) só existe pro mês de
-  // referência — é dele que vem a lista de lançamentos
-  const noMesDeReferencia = iMostrado === data.length - 1;
 
   return (
-    <div className="flex flex-col" style={{ gap: 10 }}>
-      {/* leitura do mês escolhido — é isso que faz o gráfico "responder" ao toque, e é a
-          ÚNICA linha de números do cartão: antes existia uma legenda separada logo acima
-          repetindo Entrou/Saiu, e as duas juntas ocupavam quatro linhas dizendo o mesmo */}
-      <div className="flex items-center flex-wrap" style={{ gap: 14, minHeight: 18 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--rd-text)" }}>{doMes.mes}</span>
-        {linhas.map((l) => {
-          const detalhe = noMesDeReferencia ? detalhes?.[l.key] : null;
-          const numero = <span style={{ fontWeight: 700, color: "var(--rd-text)" }}>{fmt ? fmt(doMes[l.key]) : doMes[l.key]}</span>;
-          return (
-            <span key={l.key} className="flex items-center" style={{ gap: 5, fontSize: 11.5, whiteSpace: "nowrap" }}>
-              <span style={{ width: 7, height: 7, borderRadius: 999, background: l.cor, flex: "none" }} />
-              <span style={{ color: "var(--rd-text-dim)" }}>{l.rotulo}</span>
-              {detalhe && detalhe.length > 0 ? (
-                <ValorComDetalhe itens={detalhe} fmt={fmt}>
-                  {numero}
-                </ValorComDetalhe>
-              ) : (
-                numero
-              )}
-            </span>
-          );
-        })}
-        {noMesDeReferencia && aReceber != null && (
-          <span className="flex items-center" style={{ gap: 5, fontSize: 11.5, whiteSpace: "nowrap" }}>
-            <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--rd-attention)", opacity: 0.5, flex: "none" }} />
-            <span style={{ color: "var(--rd-text-dim)" }}>A receber</span>
-            <span style={{ fontWeight: 700, color: "var(--rd-text)" }}>{fmt ? fmt(aReceber) : aReceber}</span>
-          </span>
-        )}
-      </div>
-
+    <div className="flex flex-col" style={{ gap: 8 }}>
+      {/* clicar também escolhe o mês, não só passar o mouse: no iPad/desktop a pessoa
+          clica no gráfico esperando "travar" naquele mês */}
       <div
         style={{ position: "relative", cursor: "crosshair", touchAction: "pan-y" }}
         onMouseMove={(e) => escolherPorPosicao(e.clientX, e.currentTarget)}
         onMouseLeave={() => setIAtivo(null)}
+        onClick={(e) => escolherPorPosicao(e.clientX, e.currentTarget)}
         onTouchStart={(e) => escolherPorPosicao(e.touches[0].clientX, e.currentTarget)}
         onTouchMove={(e) => escolherPorPosicao(e.touches[0].clientX, e.currentTarget)}
       >
@@ -5770,6 +5781,18 @@ function GraficoCaixa({ data, fmt, detalhes, aReceber }) {
             {d.mes}
           </span>
         ))}
+      </div>
+
+      {/* legenda do gráfico: só diz qual linha é qual. Os valores ficam na legenda do
+          cartão, que acompanha o mês escolhido aqui */}
+      <div className="flex items-center flex-wrap" style={{ gap: 14 }}>
+        {linhas.map((l) => (
+          <span key={l.key} className="flex items-center" style={{ gap: 6, fontSize: 11.5, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>
+            <span style={{ width: 14, height: 2, borderRadius: 2, background: l.cor, flex: "none" }} />
+            {l.rotulo}
+          </span>
+        ))}
+        {rodape && <span style={{ marginLeft: "auto" }}>{rodape}</span>}
       </div>
     </div>
   );
@@ -5910,6 +5933,9 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const [valoresOcultos, setValoresOcultos] = useState(false);
   const fmt = valoresOcultos ? () => "R$ ••••••" : formatCurrency;
 
+  // mês destacado no gráfico (null = o mês de referência, o último da série)
+  const [iMesGrafico, setIMesGrafico] = useState(null);
+
   // a janela do gráfico é fixa em 6 meses terminando no mês escolhido — o seletor
   // 3m/6m/12m saiu do cabeçalho: quem manda na tela é o mês, e um controle a mais só
   // pra mudar o tamanho da janela do gráfico não pagava o espaço que ocupava
@@ -5930,6 +5956,12 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
     const saidasDoMes = doMesX.filter((l) => l.tipo === "saida" && l.natureza !== "Expansão").reduce((s, l) => s + Number(l.valor), 0) + manut;
     return { mes: monthLabel(key), Entradas: entradasDoMes, Saídas: saidasDoMes, Lucro: entradasDoMes - saidasDoMes };
   });
+
+  // o mês que a legenda do cartão está mostrando — o destacado no gráfico, ou o de
+  // referência quando não há nenhum destacado
+  const iMesLegenda = Math.min(iMesGrafico ?? chartData.length - 1, Math.max(0, chartData.length - 1));
+  const mesDoGrafico = chartData[iMesLegenda] || { mes: rotuloMes, Entradas: 0, Saídas: 0, Lucro: 0 };
+  const mesDoGraficoEhReferencia = iMesLegenda === chartData.length - 1;
 
   // margem média dos últimos 12 meses — fixa, independente do período escolhido no
   // seletor do gráfico. Soma entradas/lucro do período (em vez de fazer a média das
@@ -6066,9 +6098,9 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const contagemPendencias = cardsPendencia.filter((c) => c.atencao).length;
 
   return (
-    <div className="flex flex-col" style={{ gap: 22 }}>
+    <div className="flex flex-col" style={{ gap: 14 }}>
       {/* Faixa 1 — Precisa de você */}
-      <div className="flex flex-col" style={{ gap: 11 }}>
+      <div className="flex flex-col" style={{ gap: 9 }}>
         <div className="flex items-baseline" style={{ gap: 10 }}>
           <span style={{ ...RD_LABEL, color: "var(--rd-attention)" }}>Precisa de você</span>
           <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>
@@ -6087,10 +6119,10 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                   background: c.atencao ? "var(--rd-attention-bg)" : "var(--rd-surface)",
                   border: `1px solid ${c.atencao ? "var(--rd-attention-border)" : "var(--rd-border)"}`,
                   borderRadius: 14,
-                  padding: "16px 18px",
+                  padding: "12px 16px",
                   display: "flex",
                   alignItems: "center",
-                  gap: 14 }}
+                  gap: 12 }}
               >
                 <div
                   style={{
@@ -6136,10 +6168,10 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
       </div>
 
       {/* Faixa 2 — Caixa do mês + Frota agora */}
-      <div className="flex flex-col lg:flex-row" style={{ gap: 18 }}>
+      <div className="flex flex-col lg:flex-row" style={{ gap: 14 }}>
         <div
           className="flex flex-col"
-          style={{ flex: "1.35 1 380px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "18px 20px", gap: 16 }}
+          style={{ flex: "1.35 1 380px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "15px 18px", gap: 12 }}
         >
           <div className="flex items-center flex-wrap" style={{ gap: 10 }}>
             <span style={RD_LABEL}>Caixa de {nomeDoMesRef}</span>
@@ -6230,13 +6262,13 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
               Com o número a 42px nada cabia lado a lado no iPad e cada bloco caía numa
               linha, esticando o cartão pra quase duas telas de altura. Os tamanhos agora
               acompanham a largura (clamp), então a faixa se mantém em uma linha */}
-          <div className="flex items-end flex-wrap" style={{ gap: 20 }}>
-            <div className="flex flex-col" style={{ gap: 5, minWidth: 0 }}>
-              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Resultado do mês</span>
+          <div className="flex items-end flex-wrap" style={{ gap: 16, rowGap: 12 }}>
+            <div className="flex flex-col" style={{ gap: 5, flex: "none" }}>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>Resultado do mês</span>
               <ValorComDetalhe itens={detalhesResultado} fmt={fmt}>
                 <span
                   style={{
-                    fontSize: "clamp(24px, 2.7vw, 34px)",
+                    fontSize: "clamp(21px, 2.3vw, 29px)",
                     fontWeight: 700,
                     letterSpacing: "-0.035em",
                     lineHeight: 1,
@@ -6248,50 +6280,74 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                 </span>
               </ValorComDetalhe>
             </div>
-            <div className="flex flex-wrap" style={{ gap: 18, paddingBottom: 2, borderLeft: "1px solid var(--rd-border)", paddingLeft: 18 }}>
+            <div className="flex" style={{ gap: 16, flex: "none", flexWrap: "nowrap", paddingBottom: 2, borderLeft: "1px solid var(--rd-border)", paddingLeft: 16 }}>
               <div className="flex flex-col" style={{ gap: 4 }}>
                 <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Faturamento</span>
                 <ValorComDetalhe itens={detalhesEntradas} fmt={fmt}>
-                  <span style={{ fontSize: "clamp(15px, 1.5vw, 19px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, whiteSpace: "nowrap", color: "var(--rd-text)" }}>
+                  <span style={{ fontSize: "clamp(14px, 1.35vw, 17px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, whiteSpace: "nowrap", color: "var(--rd-text)" }}>
                     {fmt(entradasMes)}
                   </span>
                 </ValorComDetalhe>
                 {deltaFaturamento != null && (
-                  <span style={{ fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap", color: deltaFaturamento >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", color: deltaFaturamento >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
                     {deltaFaturamento >= 0 ? "↗" : "↘"} {Math.abs(deltaFaturamento).toFixed(0)}% vs {rotuloMesAnterior}
                   </span>
                 )}
               </div>
               <div className="flex flex-col" style={{ gap: 4 }}>
                 <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Margem de lucro</span>
-                <span style={{ fontSize: "clamp(15px, 1.5vw, 19px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>
+                <span style={{ fontSize: "clamp(14px, 1.35vw, 17px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>
                   {margemLucro.toFixed(1)}%
                 </span>
-                <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>média 12m: {margemMedia12m.toFixed(1)}%</span>
+                <span style={{ fontSize: 11, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>média 12m: {margemMedia12m.toFixed(1)}%</span>
               </div>
+            </div>
+
+            {/* o que entrou e o que saiu, com o detalhamento no clique. Acompanha o mês
+                escolhido no gráfico: tocar num mês de trás muda estes números */}
+            <div className="flex items-center flex-wrap" style={{ gap: 14, paddingBottom: 3, flex: "none" }}>
+              {!mesDoGraficoEhReferencia && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--rd-attention)" }}>{mesDoGrafico.mes}</span>
+              )}
+              <LegendaPonto
+                cor="var(--rd-positive)"
+                label="Entrou"
+                valor={fmt(mesDoGrafico.Entradas)}
+                itens={mesDoGraficoEhReferencia ? detalhesEntradas : null}
+                fmt={fmt}
+              />
+              <LegendaPonto
+                cor="var(--rd-negative)"
+                label="Saiu"
+                valor={fmt(mesDoGrafico.Saídas)}
+                itens={mesDoGraficoEhReferencia ? detalhesSaidas : null}
+                fmt={fmt}
+              />
+              {mesDoGraficoEhReferencia ? (
+                <LegendaPonto cor="var(--rd-attention)" label="A receber" valor={fmt(aReceberMes)} />
+              ) : (
+                <LegendaPonto cor="var(--rd-attention)" label="Sobrou" valor={fmt(mesDoGrafico.Lucro)} />
+              )}
             </div>
           </div>
 
-          {/* a leitura dos números do mês (com o detalhamento de Entrou/Saiu ao toque)
-              é a linha do próprio gráfico — ver GraficoCaixa */}
+          {/* o "Saldo previsto" vai junto da legenda do gráfico: sozinho ele virava mais
+              uma linha no cartão, e o cartão precisa caber na tela do iPad deitado */}
           <GraficoCaixa
             data={chartData}
-            fmt={fmt}
-            detalhes={{ Entradas: detalhesEntradas, "Saídas": detalhesSaidas, Lucro: detalhesResultado }}
-            aReceber={aReceberMes}
+            iAtivo={iMesGrafico}
+            onAtivo={setIMesGrafico}
+            rodape={
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                Saldo previsto 12m <strong style={{ color: "var(--rd-brand-light)" }}>{fmt(saldoPrevisto12Meses)}</strong>
+              </span>
+            }
           />
-
-          <div className="flex items-center flex-wrap" style={{ gap: 20 }}>
-            <span style={{ fontSize: 12, color: "var(--rd-text-faint)" }}>toque no gráfico pra ver mês a mês</span>
-            <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--rd-text-dim)" }}>
-              Saldo previsto 12m <strong style={{ color: "var(--rd-brand-light)" }}>{fmt(saldoPrevisto12Meses)}</strong>
-            </span>
-          </div>
         </div>
 
         <div
           className="flex flex-col"
-          style={{ flex: "1 1 280px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "18px 20px", gap: 15 }}
+          style={{ flex: "1 1 280px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "15px 18px", gap: 11 }}
         >
           <div className="flex items-center">
             <span style={RD_LABEL}>Frota agora</span>
@@ -6304,8 +6360,11 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nenhuma moto cadastrada ainda.</span>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+              {/* no máximo 7 + um atalho: com a frota crescendo, a grade ia ganhando
+                  linha atrás de linha e era ela que tirava a Visão geral da tela */}
               {[...motos]
                 .sort((a, b) => (a.status === "alugada" ? 0 : 1) - (b.status === "alugada" ? 0 : 1))
+                .slice(0, motos.length > 8 ? 7 : 8)
                 .map((m) => {
                 const alugada = m.status === "alugada";
                 const dias = !alugada ? diasParadaDaMoto(m) : null;
@@ -6337,17 +6396,38 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                   </div>
                 );
               })}
+              {motos.length > 8 && (
+                <button
+                  onClick={() => onIrPara?.("motos")}
+                  style={{
+                    background: "var(--rd-surface-2)",
+                    border: "1px solid var(--rd-border)",
+                    borderRadius: 10,
+                    padding: "8px 7px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 2,
+                    minWidth: 0 }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--rd-brand-light)" }}>+{motos.length - 7}</span>
+                  <span style={{ fontSize: 10, color: "var(--rd-text-dim)" }}>ver todas</span>
+                </button>
+              )}
             </div>
           )}
 
           {paybackPorMoto.length > 0 && (
             <div className="flex flex-col" style={{ gap: 12, paddingTop: 4, borderTop: "1px solid var(--rd-border-soft)" }}>
-              <div className="flex items-baseline flex-wrap" style={{ gap: 8, paddingTop: 14 }}>
+              <div className="flex items-baseline flex-wrap" style={{ gap: 8, paddingTop: 10 }}>
                 <span style={RD_LABEL}>Payback</span>
-                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta pra cada moto devolver o valor de compra dela</span>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta de cada moto</span>
               </div>
-              <div className="flex flex-col" style={{ gap: 9 }}>
-                {paybackPorMoto.map((r) => {
+              <div className="flex flex-col" style={{ gap: 7 }}>
+                {/* só as 5 mais perto de se pagar — a lista inteira sozinha estourava a
+                    altura da tela, e o resto está na Frota, com a mesma barra */}
+                {paybackPorMoto.slice(0, 5).map((r) => {
                   const parada = r.status !== "alugada";
                   const cor = parada ? "var(--rd-negative)" : r.percentPago >= 50 ? "var(--rd-positive)" : r.percentPago >= 15 ? "var(--rd-attention)" : "var(--rd-negative)";
                   return (
@@ -6364,6 +6444,14 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     </div>
                   );
                 })}
+                {paybackPorMoto.length > 5 && (
+                  <button
+                    onClick={() => onIrPara?.("motos")}
+                    style={{ alignSelf: "flex-start", background: "none", fontSize: 11.5, fontWeight: 700, color: "var(--rd-brand-light)", marginTop: 2 }}
+                  >
+                    ver as {paybackPorMoto.length} na Frota ›
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -6371,10 +6459,10 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
       </div>
 
       {/* Faixa 3 — Próximos 7 dias / Onde estão / Do começo */}
-      <div className="flex flex-col lg:flex-row" style={{ gap: 18 }}>
+      <div className="flex flex-col lg:flex-row" style={{ gap: 14 }}>
         <div
           className="flex flex-col"
-          style={{ flex: "1 1 260px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "17px 19px", gap: 12 }}
+          style={{ flex: "1 1 260px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "14px 17px", gap: 10 }}
         >
           <span style={RD_LABEL}>Próximos 7 dias</span>
           {itens7d.length === 0 ? (
@@ -6410,8 +6498,8 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             background: "var(--rd-surface)",
             border: "1px solid var(--rd-border)",
             borderRadius: 16,
-            padding: "17px 19px",
-            gap: 12,
+            padding: "14px 17px",
+            gap: 10,
             textAlign: "left",
             cursor: "pointer" }}
         >
@@ -6419,7 +6507,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             <span style={RD_LABEL}>Onde estão</span>
             <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--rd-text-dim)" }}>ver mapa ›</span>
           </div>
-          <div style={{ flex: 1, minHeight: 132, borderRadius: 12, overflow: "hidden", border: "1px solid var(--rd-border-soft)", position: "relative" }}>
+          <div style={{ flex: 1, minHeight: 104, borderRadius: 12, overflow: "hidden", border: "1px solid var(--rd-border-soft)", position: "relative" }}>
             <TrackingMap
               mini
               link={config?.linkRastreioGeral || LINK_RASTREIO_PADRAO}
@@ -6448,10 +6536,10 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
 
         <div
           className="flex flex-col"
-          style={{ flex: "0.8 1 220px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "17px 19px", gap: 14 }}
+          style={{ flex: "0.8 1 220px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "14px 17px", gap: 12 }}
         >
           <span style={RD_LABEL}>Do começo</span>
-          <div className="flex flex-col" style={{ gap: 13 }}>
+          <div className="flex flex-col" style={{ gap: 9 }}>
             <ValorPequeno label="Investido em frota" valor={fmt(investimentoFrota)} />
             <ValorPequeno label="Já faturado" valor={fmt(faturamentoAcumulado)} cor="var(--rd-brand-light)" />
             <ValorPequeno label="Ticket médio" valor={fmt(ticketMedio)} />
@@ -7284,7 +7372,7 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-desktop-only { display: flex; }
           .mbr-mobile-only { display: none; }
           .mbr-desktop-grid { display: grid; }
-          .mbr-main-pad-bottom { padding-bottom: 32px; }
+          .mbr-main-pad-bottom { padding-bottom: 20px; }
         }
 
         /* -----------------------------------------------------------
@@ -7559,7 +7647,7 @@ function AppAutenticado({ perfil, onSignOut }) {
                 display: telaTemTituloProprio ? "none" : undefined,
                 alignItems: "center",
                 gap: 16,
-                padding: "20px 28px",
+                padding: "13px 28px",
                 position: "relative",
                 background:
                   tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0E1512", 0.92)} 0%, ${hexToRgba("#0E1512", 0.92)} 55%, ${hexToRgba("#0E1512", 0)} 100%)` : "var(--rd-shell)",
