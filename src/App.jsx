@@ -923,7 +923,13 @@ function Modal({ title, onClose, children }) {
   return createPortal(
     <div
       className="fixed inset-0 flex items-end sm:items-center justify-center"
-      style={{ background: "rgba(6,10,8,0.74)", opacity: visible ? 1 : 0, transition: "opacity 0.2s ease", zIndex: 999 }}
+      style={{
+        background: "rgba(6,10,8,0.62)",
+        backdropFilter: "blur(7px) saturate(1.1)",
+        WebkitBackdropFilter: "blur(7px) saturate(1.1)",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 0.2s ease",
+        zIndex: 999 }}
       onClick={handleClose}
     >
       <div
@@ -2074,7 +2080,7 @@ function MapToolButton({ icon: Icon, label, onClick, active }) {
 // "mini": versão de miniatura, pro cartão "Onde estão" da Visão geral — mesmo mapa e
 // mesmos pinos, só que sem controles, sem popup, sem gestos (o cartão inteiro é um
 // atalho pra tela de Rastreamento) e atualizando com menos frequência
-function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0, mini = false }) {
+function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0, mini = false, onResumo }) {
   const containerRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef({});
@@ -2088,6 +2094,10 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
   const clientesRef = useRef(clientes);
   const [status, setStatus] = useState("carregando"); // carregando | ok | erro
   const [mostrarRastro, setMostrarRastro] = useState(false);
+  const onResumoRef = useRef(onResumo);
+  useEffect(() => {
+    onResumoRef.current = onResumo;
+  }, [onResumo]);
 
   useEffect(() => {
     mostrarRastroRef.current = mostrarRastro;
@@ -2262,6 +2272,12 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
             });
           }
         }
+
+        // quem está DE FATO em movimento é o rastreador verde — amarelo é moto parada e
+        // vermelho é offline. Antes o cartão mostrava as motos alugadas como "em
+        // movimento", que é outra coisa: alugada e parada no pátio do cliente é comum.
+        const emMovimento = devices.filter((d) => d.icon_color === "green").length;
+        onResumoRef.current?.({ emMovimento, total: devices.length });
 
         setStatus("ok");
       } catch {
@@ -4153,7 +4169,13 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     const hojeISO = todayISO();
     const mesHoje = hojeISO.slice(0, 7);
     const diaHoje = Number(hojeISO.slice(8, 10));
-    const recorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada")];
+    // TODA cobrança do mês entra aqui: contrato, conta de entrada que se repete e conta
+    // de entrada avulsa com vencimento no mês. Antes a avulsa ficava de fora, então o
+    // "falta entrar" daqui não batia com o "A receber" da Visão geral.
+    const entradasAvulsas = futuros.filter(
+      (f) => f.tipo === "entrada" && !f.recorrente && (f.vencimento || "").slice(0, 7) === mesAtualKey
+    );
+    const recorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada"), ...entradasAvulsas];
     const agora = [];
     const depois = [];
     recorrentes.forEach((f) => {
@@ -4162,15 +4184,21 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
       const moto = motos?.find((m) => m.id === f.motoId);
       const cliente = moto?.contratoAtual ? clientes?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
       const mesDaPrimeira = (f.vencimento || "").slice(0, 7);
-      const jaComecou = !mesDaPrimeira || mesDaPrimeira <= mesAtualKey;
+      // MESMA regra do resto do site: contrato usa contratoCobraNoMes (que respeita a 1ª
+      // cobrança E a data de término); conta que se repete respeita início e término dela
+      const jaComecou = f.origemContrato
+        ? contratoCobraNoMes(moto?.contratoAtual, mesAtualKey)
+        : !mesDaPrimeira ||
+          (mesDaPrimeira <= mesAtualKey && (!f.dataTermino || mesAtualKey <= f.dataTermino.slice(0, 7)));
       // estado de cada cobrança, lido de onde o dinheiro realmente entra: pra contrato é
       // o pagamento lançado no Caixa pra essa moto (mesmo caminho da aba Motos, então as
-      // duas telas nunca se contradizem); pra conta recorrente comum é o "confirmados"
-      // dela. Antes a agenda era só uma lista de dias, sem saber quem já pagou.
+      // duas telas nunca se contradizem); pra conta comum é o "confirmados"/"pago" dela.
       const recebido = jaComecou
-        ? moto
+        ? f.origemContrato && moto
           ? pagouNoMes(pagamentosDaMoto(moto, lancamentos), mesAtualKey)
-          : (f.confirmados || []).includes(mesAtualKey)
+          : f.recorrente
+          ? (f.confirmados || []).includes(mesAtualKey)
+          : !!f.pago
         : false;
       const atrasado = jaComecou && !recebido && mesAtualKey === mesHoje && dia < diaHoje;
       const item = {
@@ -5707,6 +5735,25 @@ function RadialStat({ label, percent, color, sublabel, bare }) {
 const RD_LABEL = { fontSize: 11.5, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--rd-brand-soft)" };
 
 
+// uma linha de "conta do mês": data curta, nome e valor com sinal. Usada no cartão
+// "Este mês" e no painel que abre em cima quando a lista é grande demais pro cartão
+function LinhaConta({ item }) {
+  return (
+    <div className="flex items-center" style={{ gap: 10, paddingTop: 4 }}>
+      <span style={{ fontSize: 11, color: "var(--rd-text-faint)", flex: "none", width: 34 }}>
+        {(item.data || "").slice(8, 10)}/{(item.data || "").slice(5, 7)}
+      </span>
+      <span className="truncate" style={{ fontSize: 12.5, flex: 1, color: "var(--rd-text)" }}>
+        {item.label}
+      </span>
+      <span style={{ fontSize: 12.5, fontWeight: 700, flex: "none", color: item.sinal > 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+        {item.sinal > 0 ? "+ " : "− "}
+        {item.valorFmt}
+      </span>
+    </div>
+  );
+}
+
 function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
   return (
     <div className="flex flex-col" style={{ gap: 1 }}>
@@ -5982,7 +6029,10 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
 
   // mês destacado no gráfico (null = o mês de referência, o último da série)
   const [iMesGrafico, setIMesGrafico] = useState(null);
-  const [verTudoDoMes, setVerTudoDoMes] = useState(false);
+  // qual painel sobreposto está aberto: "mes" (contas do mês) ou "7dias"
+  const [painel, setPainel] = useState(null);
+  // quantos rastreadores estão verdes agora — quem informa é o próprio mapa
+  const [resumoRastreio, setResumoRastreio] = useState({ emMovimento: 0, total: 0 });
 
   // a janela do gráfico é fixa em 6 meses terminando no mês escolhido — o seletor
   // 3m/6m/12m saiu do cabeçalho: quem manda na tela é o mês, e um controle a mais só
@@ -6099,11 +6149,20 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const itens7d = [...itensEntrada7d.map((i) => ({ ...i, sinal: 1 })), ...itensSaida7d.map((i) => ({ ...i, sinal: -1 }))]
     .sort((a, b) => b.total - a.total)
     .slice(0, 6);
-  // "a receber esse mês" = o que os contratos ativos ainda vão gerar no mês vs o que já entrou
-  const aReceberMes = Math.max(0, faturamentoPrevisto - entradasMes);
-
   // o que ainda falta entrar e sair no mês de referência, com os itens por trás
   const emAbertoNoMes = pendenciasDoMes(futuros, motos, lancamentos, mesRef);
+
+  const contasDoMes = [
+    ...emAbertoNoMes.aReceber.map((i) => ({ ...i, sinal: 1, valorFmt: fmt(i.valor) })),
+    ...emAbertoNoMes.aPagar.map((i) => ({ ...i, sinal: -1, valorFmt: fmt(i.valor) })),
+  ].sort((a, b) => ((a.data || "") < (b.data || "") ? -1 : 1));
+
+  // "A RECEBER" é sempre a soma dos itens em aberto — a mesma conta do cartão "Este mês"
+  // e da agenda de cobranças. Antes aqui era "previsto dos contratos menos TUDO que
+  // entrou no mês", uma conta agregada: qualquer entrada que não fosse mensalidade
+  // (ou fosse de uma moto sem cobrança no mês) abatia do previsto do mesmo jeito, e o
+  // número saía diferente do das outras duas telas.
+  const aReceberMes = emAbertoNoMes.totalReceber;
 
   // faixa "PRECISA DE VOCÊ" — ordenado por severidade; Cobrança nunca some (serve de
   // confirmação quando está tudo em dia)
@@ -6141,10 +6200,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
     key: "7dias",
     atencao: false,
     Icon: CalendarClock,
-    titulo:
-      itens7d.length === 0
-        ? "Nada em 7 dias"
-        : `${itens7d.length} em 7 dias`,
+    titulo: "Próximos 7 dias",
     sub:
       itens7d.length === 0
         ? "Nenhum vencimento pela frente."
@@ -6153,7 +6209,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             .map((i) => `${i.sinal > 0 ? "+" : "−"} ${formatCurrencyCurto(i.total)} ${i.label}`)
             .join(" · "),
     acao: itens7d.length > 0 ? "Ver" : null,
-    onClick: itens7d.length > 0 ? () => onIrPara?.("fluxo") : undefined,
+    onClick: itens7d.length > 0 ? () => setPainel("7dias") : undefined,
   });
   cardsPendencia.push({
     key: "cobranca",
@@ -6537,6 +6593,47 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
         </div>
       </div>
 
+      {/* PAINÉIS SOBREPOSTOS — a lista completa abre por cima, sem esticar a tela */}
+      {painel === "mes" && (
+        <Modal title={`Em aberto em ${nomeDoMesRef}`} onClose={() => setPainel(null)}>
+          <div className="flex items-center flex-wrap" style={{ gap: 18, marginBottom: 14 }}>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A receber</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: "var(--rd-positive)" }}>{fmt(emAbertoNoMes.totalReceber)}</span>
+            </div>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A pagar</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: "var(--rd-negative)" }}>{fmt(emAbertoNoMes.totalPagar)}</span>
+            </div>
+          </div>
+          <div className="flex flex-col" style={{ gap: 6, paddingTop: 8, borderTop: "1px solid var(--rd-border-soft)" }}>
+            {contasDoMes.map((it) => (
+              <LinhaConta key={`${it.sinal}-${it.id}`} item={it} />
+            ))}
+          </div>
+        </Modal>
+      )}
+
+      {painel === "7dias" && (
+        <Modal title="Próximos 7 dias" onClose={() => setPainel(null)}>
+          <div className="flex flex-col" style={{ gap: 6 }}>
+            {itens7d.length === 0 ? (
+              <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nenhum vencimento pela frente.</span>
+            ) : (
+              itens7d.map((it, i) => (
+                <div key={i} className="flex items-center" style={{ gap: 10, paddingTop: 4 }}>
+                  <span className="truncate" style={{ fontSize: 12.5, flex: 1, color: "var(--rd-text)" }}>{it.label}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, flex: "none", color: it.sinal > 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                    {it.sinal > 0 ? "+ " : "− "}
+                    {fmt(it.total)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </Modal>
+      )}
+
       {/* Faixa 3 — Este mês / Onde estão / Do começo */}
       <div className="flex flex-col lg:flex-row" style={{ gap: 14 }}>
         {/* ESTE MÊS — o que ainda falta entrar e sair, já com os itens embaixo: o total
@@ -6566,37 +6663,21 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             </div>
           </div>
 
-          {emAbertoNoMes.aReceber.length + emAbertoNoMes.aPagar.length === 0 ? (
+          {contasDoMes.length === 0 ? (
             <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nada em aberto neste mês.</span>
           ) : (
             <div className="flex flex-col" style={{ gap: 6, paddingTop: 2, borderTop: "1px solid var(--rd-border-soft)" }}>
-              {[
-                ...emAbertoNoMes.aReceber.map((i) => ({ ...i, sinal: 1 })),
-                ...emAbertoNoMes.aPagar.map((i) => ({ ...i, sinal: -1 })),
-              ]
-                .slice(0, verTudoDoMes ? undefined : 3)
-                .map((it) => (
-                  <div key={`${it.sinal}-${it.id}`} className="flex items-center" style={{ gap: 10, paddingTop: 4 }}>
-                    <span style={{ fontSize: 11, color: "var(--rd-text-faint)", flex: "none", width: 34 }}>
-                      {(it.data || "").slice(8, 10)}/{(it.data || "").slice(5, 7)}
-                    </span>
-                    <span className="truncate" style={{ fontSize: 12.5, flex: 1, color: "var(--rd-text)" }}>
-                      {it.label}
-                    </span>
-                    <span style={{ fontSize: 12.5, fontWeight: 700, flex: "none", color: it.sinal > 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
-                      {it.sinal > 0 ? "+ " : "− "}
-                      {fmt(it.valor)}
-                    </span>
-                  </div>
-                ))}
-              {emAbertoNoMes.aReceber.length + emAbertoNoMes.aPagar.length > 3 && (
+              {contasDoMes.slice(0, 3).map((it) => (
+                <LinhaConta key={`${it.sinal}-${it.id}`} item={it} />
+              ))}
+              {/* a lista inteira abre num painel POR CIMA da tela — esticar o cartão pra
+                  baixo empurrava a Visão geral inteira e tirava ela da tela */}
+              {contasDoMes.length > 3 && (
                 <button
-                  onClick={() => setVerTudoDoMes((v) => !v)}
+                  onClick={() => setPainel("mes")}
                   style={{ alignSelf: "flex-start", background: "none", fontSize: 11.5, fontWeight: 700, color: "var(--rd-brand-light)", marginTop: 2 }}
                 >
-                  {verTudoDoMes
-                    ? "ver menos"
-                    : `ver as outras ${emAbertoNoMes.aReceber.length + emAbertoNoMes.aPagar.length - 3}`}
+                  ver as outras {contasDoMes.length - 3}
                 </button>
               )}
             </div>
@@ -6634,22 +6715,30 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
               clientes={clientes}
               height="100%"
               rounded={false}
+              onResumo={setResumoRastreio}
             />
-            <div
-              className="absolute flex items-center"
-              style={{
-                left: 10,
-                bottom: 10,
-                gap: 10,
-                borderRadius: 999,
-                padding: "5px 12px",
-                background: "rgba(14, 21, 18, 0.86)",
-                border: "1px solid var(--rd-border)",
-                pointerEvents: "none" }}
-            >
-              <span style={{ fontSize: 11.5, color: "var(--rd-positive)", fontWeight: 700 }}>{alugadas} em movimento</span>
-              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{disponiveis} paradas</span>
-            </div>
+            {/* só aparece quando tem moto rodando de verdade (rastreador verde). Parada
+                é o estado normal da frota, não é notícia — e a pílula ficava brigando
+                com a atribuição do OpenStreetMap, que é obrigatória e mora embaixo */}
+            {resumoRastreio.emMovimento > 0 && (
+              <div
+                className="absolute flex items-center"
+                style={{
+                  left: 10,
+                  top: 10,
+                  gap: 6,
+                  borderRadius: 999,
+                  padding: "4px 11px",
+                  background: "rgba(14, 21, 18, 0.88)",
+                  border: "1px solid var(--rd-border)",
+                  pointerEvents: "none" }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--rd-positive)", flex: "none" }} />
+                <span style={{ fontSize: 11.5, color: "var(--rd-positive)", fontWeight: 700 }}>
+                  {resumoRastreio.emMovimento} em movimento
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
