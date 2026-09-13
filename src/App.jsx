@@ -20,6 +20,7 @@ import {
   TrendingUp,
   TrendingDown,
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   Clock,
   Wrench,
@@ -470,6 +471,52 @@ const dataDoFuturoNoMes = (f, mesKey) => {
   const dia = f.diaVencimento || Number((f.vencimento || `${mesKey}-01`).slice(8, 10)) || 1;
   return `${mesKey}-${String(dia).padStart(2, "0")}`;
 };
+
+// O QUE AINDA ESTÁ EM ABERTO NUM MÊS — as contas futuras que não viraram lançamento e o
+// aluguel dos contratos que ainda não foi lançado no Caixa. Devolve os itens, não só os
+// totais: é isso que responde "o que exatamente falta entrar/sair este mês".
+function pendenciasDoMes(futuros, motos, lancamentos, mesKey) {
+  const aReceber = [];
+  const aPagar = [];
+
+  (futuros || []).forEach((f) => {
+    if (!futuroPendenteNoMes(f, mesKey)) return;
+    const moto = (motos || []).find((m) => m.id === f.motoId);
+    const nome = nomeDoFuturo(f);
+    const placa = moto ? formatPlaca(moto.placa) : "";
+    (f.tipo === "entrada" ? aReceber : aPagar).push({
+      id: f.id,
+      label: placa && !nome.includes(placa) ? `${nome} (${placa})` : nome,
+      valor: Number(f.valor) || 0,
+      data: dataDoFuturoNoMes(f, mesKey),
+    });
+  });
+
+  (motos || []).forEach((m) => {
+    const c = m.contratoAtual;
+    if (!c || !(Number(c.valorMensal) > 0)) return;
+    if (!contratoCobraNoMes(c, mesKey)) return;
+    // já lançado no Caixa neste mês = não está mais em aberto
+    if (pagouNoMes(pagamentosDaMoto(m, lancamentos), mesKey)) return;
+    const dia = diaVencimentoDoContrato(c);
+    const [ano, mesN] = mesKey.split("-").map(Number);
+    const ultimo = new Date(ano, mesN, 0).getDate();
+    aReceber.push({
+      id: `contrato-${m.id}`,
+      label: `Mensalidade ${formatPlaca(m.placa)}`,
+      valor: Number(c.valorMensal) || 0,
+      data: `${mesKey}-${String(Math.min(dia || 1, ultimo)).padStart(2, "0")}`,
+    });
+  });
+
+  const porData = (lista) => [...lista].sort((a, b) => ((a.data || "") < (b.data || "") ? -1 : 1));
+  return {
+    aReceber: porData(aReceber),
+    aPagar: porData(aPagar),
+    totalReceber: aReceber.reduce((t, i) => t + i.valor, 0),
+    totalPagar: aPagar.reduce((t, i) => t + i.valor, 0),
+  };
+}
 
 // consulta o CEP no ViaCEP (serviço público, gratuito, sem chave) e devolve o endereço
 // pra preencher os campos sozinho — só chama quando o CEP tem os 8 dígitos
@@ -5698,7 +5745,7 @@ function LegendaPonto({ cor, label, valor, itens, fmt }) {
   );
 }
 
-function GraficoCaixa({ data, altura = 94, iAtivo, onAtivo, rodape }) {
+function GraficoCaixa({ data, altura = 82, iAtivo, onAtivo, rodape }) {
   const w = 640;
   const h = altura;
   const setIAtivo = onAtivo || (() => {});
@@ -5935,6 +5982,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
 
   // mês destacado no gráfico (null = o mês de referência, o último da série)
   const [iMesGrafico, setIMesGrafico] = useState(null);
+  const [verTudoDoMes, setVerTudoDoMes] = useState(false);
 
   // a janela do gráfico é fixa em 6 meses terminando no mês escolhido — o seletor
   // 3m/6m/12m saiu do cabeçalho: quem manda na tela é o mês, e um controle a mais só
@@ -6054,6 +6102,9 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   // "a receber esse mês" = o que os contratos ativos ainda vão gerar no mês vs o que já entrou
   const aReceberMes = Math.max(0, faturamentoPrevisto - entradasMes);
 
+  // o que ainda falta entrar e sair no mês de referência, com os itens por trás
+  const emAbertoNoMes = pendenciasDoMes(futuros, motos, lancamentos, mesRef);
+
   // faixa "PRECISA DE VOCÊ" — ordenado por severidade; Cobrança nunca some (serve de
   // confirmação quando está tudo em dia)
   const cardsPendencia = [];
@@ -6063,12 +6114,19 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
       atencao: true,
       Icon: Clock,
       titulo: `${motosParadas.length} moto${motosParadas.length === 1 ? "" : "s"} parada${motosParadas.length === 1 ? "" : "s"}`,
-      sub: motosParadas.slice(0, 3).map((m) => `${formatPlaca(m.placa)} há ${m.dias} dia${m.dias === 1 ? "" : "s"}`).join(" · "),
+      // a fila de espera anda junto: moto parada + gente esperando é uma coisa só de
+      // resolver, e assim ela não precisa de um cartão próprio nessa faixa
+      sub: [
+        motosParadas.slice(0, 2).map((m) => `${formatPlaca(m.placa)} há ${m.dias} dia${m.dias === 1 ? "" : "s"}`).join(" · "),
+        clientesSemContrato.length > 0 ? `${clientesSemContrato.length} na fila` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
       acao: "Alugar",
       onClick: () => onIrPara?.("motos"),
     });
-  }
-  if (clientesSemContrato.length > 0) {
+  } else if (clientesSemContrato.length > 0) {
+    // sem moto parada, a fila vira outro assunto: falta moto pra quem quer alugar
     cardsPendencia.push({
       key: "fila",
       atencao: false,
@@ -6079,6 +6137,24 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
       onClick: () => onIrPara?.("clientes"),
     });
   }
+  cardsPendencia.push({
+    key: "7dias",
+    atencao: false,
+    Icon: CalendarClock,
+    titulo:
+      itens7d.length === 0
+        ? "Nada em 7 dias"
+        : `${itens7d.length} em 7 dias`,
+    sub:
+      itens7d.length === 0
+        ? "Nenhum vencimento pela frente."
+        : itens7d
+            .slice(0, 1)
+            .map((i) => `${i.sinal > 0 ? "+" : "−"} ${formatCurrencyCurto(i.total)} ${i.label}`)
+            .join(" · "),
+    acao: itens7d.length > 0 ? "Ver" : null,
+    onClick: itens7d.length > 0 ? () => onIrPara?.("fluxo") : undefined,
+  });
   cardsPendencia.push({
     key: "cobranca",
     atencao: vencidas > 0,
@@ -6098,7 +6174,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const contagemPendencias = cardsPendencia.filter((c) => c.atencao).length;
 
   return (
-    <div className="flex flex-col" style={{ gap: 14 }}>
+    <div className="flex flex-col" style={{ gap: 12 }}>
       {/* Faixa 1 — Precisa de você */}
       <div className="flex flex-col" style={{ gap: 9 }}>
         <div className="flex items-baseline" style={{ gap: 10 }}>
@@ -6119,16 +6195,16 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                   background: c.atencao ? "var(--rd-attention-bg)" : "var(--rd-surface)",
                   border: `1px solid ${c.atencao ? "var(--rd-attention-border)" : "var(--rd-border)"}`,
                   borderRadius: 14,
-                  padding: "12px 16px",
+                  padding: "11px 13px",
                   display: "flex",
                   alignItems: "center",
-                  gap: 12 }}
+                  gap: 10 }}
               >
                 <div
                   style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 10,
+                    width: 32,
+                    height: 32,
+                    borderRadius: 9,
                     background: c.atencao ? "#2A2115" : "#1E2A22",
                     display: "flex",
                     alignItems: "center",
@@ -6136,11 +6212,11 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     flex: "none",
                     color: c.atencao ? "var(--rd-attention)" : "var(--rd-positive)" }}
                 >
-                  <Icon size={18} strokeWidth={2.75} />
+                  <Icon size={16} strokeWidth={2.75} />
                 </div>
                 <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
-                  <span style={{ fontSize: 14.5, fontWeight: 700, color: "var(--rd-text)" }}>{c.titulo}</span>
-                  <span className="truncate" style={{ fontSize: 12.5, color: c.atencao ? "var(--rd-attention-text)" : "var(--rd-text-dim)" }}>
+                  <span className="truncate" style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rd-text)" }}>{c.titulo}</span>
+                  <span className="truncate" style={{ fontSize: 12, color: c.atencao ? "var(--rd-attention-text)" : "var(--rd-text-dim)" }}>
                     {c.sub}
                   </span>
                 </div>
@@ -6149,12 +6225,12 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     onClick={c.onClick}
                     style={{
                       marginLeft: "auto",
-                      fontSize: 12.5,
+                      fontSize: 12,
                       fontWeight: 700,
                       color: c.atencao ? "var(--rd-attention)" : "var(--rd-brand-light)",
                       border: `1px solid ${c.atencao ? "var(--rd-attention-border)" : "#2E4034"}`,
                       borderRadius: 999,
-                      padding: "7px 14px",
+                      padding: "6px 12px",
                       flex: "none",
                       background: "transparent" }}
                   >
@@ -6305,7 +6381,10 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
 
             {/* o que entrou e o que saiu, com o detalhamento no clique. Acompanha o mês
                 escolhido no gráfico: tocar num mês de trás muda estes números */}
-            <div className="flex items-center flex-wrap" style={{ gap: 14, paddingBottom: 3, flex: "none" }}>
+            {/* flex:none fazia a legenda manter a largura natural e VAZAR pro lado de fora
+                do cartão quando o mês escolhido tinha valores grandes — agora ela encolhe
+                e quebra dentro do cartão */}
+            <div className="flex items-center flex-wrap" style={{ gap: 14, rowGap: 6, paddingBottom: 3, flex: "1 1 auto", minWidth: 0 }}>
               {!mesDoGraficoEhReferencia && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: "var(--rd-attention)" }}>{mesDoGrafico.mes}</span>
               )}
@@ -6326,7 +6405,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
               {mesDoGraficoEhReferencia ? (
                 <LegendaPonto cor="var(--rd-attention)" label="A receber" valor={fmt(aReceberMes)} />
               ) : (
-                <LegendaPonto cor="var(--rd-attention)" label="Sobrou" valor={fmt(mesDoGrafico.Lucro)} />
+                <LegendaPonto cor="var(--rd-attention)" label="Lucro" valor={fmt(mesDoGrafico.Lucro)} />
               )}
             </div>
           </div>
@@ -6425,9 +6504,9 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                 <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta de cada moto</span>
               </div>
               <div className="flex flex-col" style={{ gap: 7 }}>
-                {/* só as 5 mais perto de se pagar — a lista inteira sozinha estourava a
+                {/* só as 4 mais perto de se pagar — a lista inteira sozinha estourava a
                     altura da tela, e o resto está na Frota, com a mesma barra */}
-                {paybackPorMoto.slice(0, 5).map((r) => {
+                {paybackPorMoto.slice(0, 4).map((r) => {
                   const parada = r.status !== "alugada";
                   const cor = parada ? "var(--rd-negative)" : r.percentPago >= 50 ? "var(--rd-positive)" : r.percentPago >= 15 ? "var(--rd-attention)" : "var(--rd-negative)";
                   return (
@@ -6444,7 +6523,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
                     </div>
                   );
                 })}
-                {paybackPorMoto.length > 5 && (
+                {paybackPorMoto.length > 4 && (
                   <button
                     onClick={() => onIrPara?.("motos")}
                     style={{ alignSelf: "flex-start", background: "none", fontSize: 11.5, fontWeight: 700, color: "var(--rd-brand-light)", marginTop: 2 }}
@@ -6458,28 +6537,68 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
         </div>
       </div>
 
-      {/* Faixa 3 — Próximos 7 dias / Onde estão / Do começo */}
+      {/* Faixa 3 — Este mês / Onde estão / Do começo */}
       <div className="flex flex-col lg:flex-row" style={{ gap: 14 }}>
+        {/* ESTE MÊS — o que ainda falta entrar e sair, já com os itens embaixo: o total
+            sozinho não diz de quem cobrar nem o que pagar, e era pra isso que dava
+            vontade de clicar */}
         <div
           className="flex flex-col"
-          style={{ flex: "1 1 260px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "14px 17px", gap: 10 }}
+          style={{ flex: "1.25 1 300px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "14px 17px", gap: 10 }}
         >
-          <span style={RD_LABEL}>Próximos 7 dias</span>
-          {itens7d.length === 0 ? (
-            <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nada previsto pros próximos 7 dias.</span>
+          <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
+            <span style={RD_LABEL}>Este mês</span>
+            <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>o que falta</span>
+          </div>
+
+          <div className="flex items-end flex-wrap" style={{ gap: 18 }}>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A receber</span>
+              <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "var(--rd-positive)" }}>
+                {fmt(emAbertoNoMes.totalReceber)}
+              </span>
+            </div>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A pagar</span>
+              <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "var(--rd-negative)" }}>
+                {fmt(emAbertoNoMes.totalPagar)}
+              </span>
+            </div>
+          </div>
+
+          {emAbertoNoMes.aReceber.length + emAbertoNoMes.aPagar.length === 0 ? (
+            <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nada em aberto neste mês.</span>
           ) : (
-            <div className="flex flex-col" style={{ gap: 11 }}>
-              {itens7d.map((it, i) => (
-                <div key={i} className="flex items-center" style={{ gap: 12 }}>
-                  <span className="truncate" style={{ fontSize: 13.5, fontWeight: 500, flex: 1, color: "var(--rd-text)" }}>
-                    {it.label}
-                  </span>
-                  <span style={{ fontSize: 13.5, fontWeight: 700, color: it.sinal > 0 ? "var(--rd-brand-light)" : "var(--rd-negative)", flex: "none" }}>
-                    {it.sinal > 0 ? "+ " : "− "}
-                    {fmt(it.total)}
-                  </span>
-                </div>
-              ))}
+            <div className="flex flex-col" style={{ gap: 6, paddingTop: 2, borderTop: "1px solid var(--rd-border-soft)" }}>
+              {[
+                ...emAbertoNoMes.aReceber.map((i) => ({ ...i, sinal: 1 })),
+                ...emAbertoNoMes.aPagar.map((i) => ({ ...i, sinal: -1 })),
+              ]
+                .slice(0, verTudoDoMes ? undefined : 3)
+                .map((it) => (
+                  <div key={`${it.sinal}-${it.id}`} className="flex items-center" style={{ gap: 10, paddingTop: 4 }}>
+                    <span style={{ fontSize: 11, color: "var(--rd-text-faint)", flex: "none", width: 34 }}>
+                      {(it.data || "").slice(8, 10)}/{(it.data || "").slice(5, 7)}
+                    </span>
+                    <span className="truncate" style={{ fontSize: 12.5, flex: 1, color: "var(--rd-text)" }}>
+                      {it.label}
+                    </span>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, flex: "none", color: it.sinal > 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                      {it.sinal > 0 ? "+ " : "− "}
+                      {fmt(it.valor)}
+                    </span>
+                  </div>
+                ))}
+              {emAbertoNoMes.aReceber.length + emAbertoNoMes.aPagar.length > 3 && (
+                <button
+                  onClick={() => setVerTudoDoMes((v) => !v)}
+                  style={{ alignSelf: "flex-start", background: "none", fontSize: 11.5, fontWeight: 700, color: "var(--rd-brand-light)", marginTop: 2 }}
+                >
+                  {verTudoDoMes
+                    ? "ver menos"
+                    : `ver as outras ${emAbertoNoMes.aReceber.length + emAbertoNoMes.aPagar.length - 3}`}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -7372,7 +7491,7 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-desktop-only { display: flex; }
           .mbr-mobile-only { display: none; }
           .mbr-desktop-grid { display: grid; }
-          .mbr-main-pad-bottom { padding-bottom: 20px; }
+          .mbr-main-pad-bottom { padding-bottom: 12px; }
         }
 
         /* -----------------------------------------------------------
