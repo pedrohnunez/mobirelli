@@ -1800,97 +1800,105 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
                     borderTop: "1px solid var(--rd-border-soft)",
                     paddingTop: "var(--rd-s5)" }}
                 >
-                  {motoVinculada ? (
-                    <div className="mb-5">
-                      <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: theme.textFaint }}>
-                        Contrato ativo
-                      </div>
-                      <div className="rounded-xl p-3" style={{ background: theme.card2 }}>
-                        <div className="flex items-center justify-between mb-1">
-                          <MotoPlate placa={motoVinculada.placa} />
-                          <span style={{ color: theme.amber, fontFamily: HEAD_FONT, fontSize: 17 }}>
-                            {formatCurrency(motoVinculada.contratoAtual.valorMensal)}/mês
-                          </span>
+                  {/* sem repetir o nome do cliente aqui: ele já está na linha de cima.
+                      As ações moram no alto da coluna da direita, sem gastar uma linha só
+                      pra elas */}
+                  <div className="mbr-ficha-grid">
+                    <div className="mbr-ficha-col">
+                      {motoVinculada ? (
+                        <div>
+                          <div style={RD_LABEL} className="mb-2">Contrato ativo</div>
+                          {/* mesma faixa de fio verde da ficha da moto, em vez do quadrado
+                              escuro que fazia caixa dentro de caixa */}
+                          <div style={{ borderLeft: "2px solid var(--rd-brand)", paddingLeft: 12 }}>
+                            <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
+                              <MotoPlate placa={motoVinculada.placa} />
+                              <span style={{ color: theme.amber, fontWeight: 700, fontSize: 15 }}>
+                                {formatCurrency(motoVinculada.contratoAtual.valorMensal)}/mês
+                              </span>
+                            </div>
+                            <div style={{ color: theme.textFaint, fontSize: 11.5, marginTop: 3 }}>
+                              Contrato nº {motoVinculada.contratoAtual.numeroContrato}
+                              {diaVencimentoDoContrato(motoVinculada.contratoAtual) && ` · paga todo dia ${diaVencimentoDoContrato(motoVinculada.contratoAtual)}`}
+                              {motoVinculada.contratoAtual.dataTermino && ` · até ${formatDate(motoVinculada.contratoAtual.dataTermino)}`}
+                            </div>
+                            <div className="flex items-center gap-3 mt-2 flex-wrap">
+                              <ContratoAnexosButton
+                                anexos={contratoAnexosOf(motoVinculada.contratoAtual)}
+                                tituloPreview={`Contrato — ${formatPlaca(motoVinculada.placa)}`}
+                                onAbrir={(url, title) => setPreview({ url, title })}
+                              />
+                              {permissoes.podeEditar && (
+                                <button
+                                  onClick={() => setModal({ type: "contrato", moto: motoVinculada })}
+                                  className="inline-flex items-center gap-1 text-xs mbr-hover-grow"
+                                  style={{ color: theme.text }}
+                                >
+                                  <Pencil size={12} /> Editar contrato
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                          Contrato nº {motoVinculada.contratoAtual.numeroContrato}
-                          {diaVencimentoDoContrato(motoVinculada.contratoAtual) && ` · pagamento todo dia ${diaVencimentoDoContrato(motoVinculada.contratoAtual)}`}
-                          {motoVinculada.contratoAtual.dataTermino && ` · até ${formatDate(motoVinculada.contratoAtual.dataTermino)}`}
-                        </div>
-                        <div className="flex items-center gap-3 mt-2 flex-wrap">
-                          <ContratoAnexosButton
-                            anexos={contratoAnexosOf(motoVinculada.contratoAtual)}
-                            tituloPreview={`Contrato — ${formatPlaca(motoVinculada.placa)}`}
-                            onAbrir={(url, title) => setPreview({ url, title })}
-                          />
-                          {permissoes.podeEditar && (
+                      ) : (
+                        permissoes.podeEditar && (
+                          <div>
                             <button
-                              onClick={() => setModal({ type: "contrato", moto: motoVinculada })}
-                              className="inline-flex items-center gap-1 text-xs mbr-hover-grow"
-                              style={{ color: theme.text }}
+                              onClick={() => setModal({ mode: "vincular", cliente: c })}
+                              className="text-xs font-semibold rounded-xl px-3"
+                              style={{ background: theme.mint, color: theme.mintText, minHeight: 44 }}
                             >
-                              <Pencil size={12} /> Editar contrato
+                              Vincular a uma moto disponível
                             </button>
+                          </div>
+                        )
+                      )}
+                    </div>
+
+                    <div className="mbr-ficha-col">
+                      <div>
+                        <div className="flex items-center justify-between flex-wrap mb-2" style={{ gap: 10 }}>
+                          <span style={RD_LABEL}>Contato</span>
+                          {permissoes.podeEditar && (
+                            <div className="flex items-center" style={{ gap: 14 }}>
+                              <button
+                                onClick={() => setModal({ mode: "editar", cliente: c })}
+                                className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
+                                style={{ color: theme.outlineText }}
+                              >
+                                <Pencil size={12} /> Editar cliente
+                              </button>
+                              {!motoVinculada && (
+                                <button
+                                  onClick={() => excluir(c.id)}
+                                  className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
+                                  style={{ color: theme.coral }}
+                                >
+                                  <Trash2 size={12} /> Excluir
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
+                        <div className="flex flex-col gap-1.5" style={{ color: theme.textMuted }}>
+                          {c.cpfCnpj && <span>CPF/CNPJ: {c.cpfCnpj}</span>}
+                          {c.telefone && (
+                            <span className="flex items-center gap-1">
+                              <Phone size={12} /> {c.telefone}
+                            </span>
+                          )}
+                          {c.email && (
+                            <span className="flex items-center gap-1">
+                              <Mail size={12} /> {c.email}
+                            </span>
+                          )}
+                          <span className="flex items-center gap-1">
+                            <MapPin size={12} /> {enderecoCompleto(c)} {c.cep ? `— CEP ${c.cep}` : ""}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    permissoes.podeEditar && (
-                      <div className="mb-5">
-                        <button
-                          onClick={() => setModal({ mode: "vincular", cliente: c })}
-                          className="text-xs font-semibold rounded-xl px-3"
-                          style={{ background: theme.mint, color: theme.mintText, minHeight: 44 }}
-                        >
-                          Vincular a uma moto disponível
-                        </button>
-                      </div>
-                    )
-                  )}
-
-                  <div className="mb-5">
-                    <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: theme.textFaint }}>
-                      Contato
-                    </div>
-                    <div className="flex flex-col gap-1.5" style={{ color: theme.textMuted }}>
-                      {c.cpfCnpj && <span>CPF/CNPJ: {c.cpfCnpj}</span>}
-                      {c.telefone && (
-                        <span className="flex items-center gap-1">
-                          <Phone size={12} /> {c.telefone}
-                        </span>
-                      )}
-                      {c.email && (
-                        <span className="flex items-center gap-1">
-                          <Mail size={12} /> {c.email}
-                        </span>
-                      )}
-                      <span className="flex items-center gap-1">
-                        <MapPin size={12} /> {enderecoCompleto(c)} {c.cep ? `— CEP ${c.cep}` : ""}
-                      </span>
                     </div>
                   </div>
-
-                  {permissoes.podeEditar && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setModal({ mode: "editar", cliente: c })}
-                        className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                        style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                      >
-                        <Pencil size={12} /> Editar
-                      </button>
-                      {!motoVinculada && (
-                        <button
-                          onClick={() => excluir(c.id)}
-                          className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                          style={{ border: `1px solid ${theme.cardBorder}`, color: theme.coral }}
-                        >
-                          <Trash2 size={12} /> Excluir
-                        </button>
-                      )}
-                    </div>
-                  )}
                 </div>
               </Collapse>
             </div>
@@ -3368,16 +3376,38 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     borderTop: "1px solid var(--rd-border-soft)",
                     paddingTop: "var(--rd-s5)" }}
                 >
-                  <div className="flex items-baseline flex-wrap mb-3" style={{ gap: 8 }}>
+                  <div className="flex items-baseline flex-wrap mb-4" style={{ gap: 8 }}>
                     <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: theme.text }}>
                       {moto.modelo || "Modelo não informado"}
                     </span>
                     <span style={{ fontSize: 12, color: theme.textFaint }}>
                       {[moto.anoModelo, moto.cor].filter(Boolean).join(" · ")}
                     </span>
+                    {permissoes.podeEditar && (
+                      <div className="flex items-center" style={{ gap: 14, marginLeft: "auto" }}>
+                        <button
+                          onClick={() => setModal({ type: "moto", mode: "editar", moto })}
+                          className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
+                          style={{ color: theme.outlineText }}
+                        >
+                          <Pencil size={12} /> Editar moto
+                        </button>
+                        {moto.status !== "alugada" && (
+                          <button
+                            onClick={() => excluirMoto(moto.id)}
+                            className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
+                            style={{ color: theme.coral }}
+                          >
+                            <Trash2 size={12} /> Excluir
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="mb-4">
+                  <div className="mbr-ficha-grid">
+                  <div className="mbr-ficha-col">
+                  <div>
                     {moto.contratoAtual ? (
                       /* sem o bloco escuro por dentro do cartão: um fio na esquerda marca
                          o contrato sem criar uma "caixa dentro da caixa" */
@@ -3466,15 +3496,41 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     )}
                   </div>
 
-                  <div className="mb-4">
+                  <div>
                     <MotoTrackingBlock link={moto.linkRastreamento || config?.linkRastreioGeral} placa={moto.placa} />
                   </div>
-
-                  <div className="mb-4">
+                  <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
-                        Manutenções
-                      </span>
+                      <span style={RD_LABEL}>Pagamentos recebidos</span>
+                    </div>
+                    {pagamentos.length === 0 ? (
+                      <div style={{ color: theme.textMuted, fontSize: 12 }}>
+                        Nenhum pagamento lançado pra essa moto ainda — lance no Caixa escolhendo a moto,
+                        ou pelo botão de pagamento aqui em cima quando estiver atrasado.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between text-xs mb-1" style={{ color: theme.mint, fontWeight: 700 }}>
+                          <span>Total recebido</span>
+                          <span>{formatCurrency(pagamentos.reduce((s, p) => s + Number(p.valor), 0))}</span>
+                        </div>
+                        {pagamentos.map((p) => (
+                          <div key={p.id} className="flex items-center justify-between text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
+                            <span style={{ color: theme.text }}>
+                              {formatDate(p.data)} · {p.categoria || "Sem categoria"}
+                            </span>
+                            <span style={{ color: theme.textMuted }}>{formatCurrency(p.valor)}</span>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                  </div>
+
+                  <div className="mbr-ficha-col">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span style={RD_LABEL}>Manutenções</span>
                       {permissoes.podeEditar && (
                         <button
                           onClick={() => setModal({ type: "manutencao", moto })}
@@ -3500,11 +3556,9 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     )}
                   </div>
 
-                  <div className="mb-4">
+                  <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
-                        Custos
-                      </span>
+                      <span style={RD_LABEL}>Custos</span>
                       {permissoes.podeEditar && (
                         <button
                           onClick={() => setModal({ type: "custoExtra", moto })}
@@ -3530,36 +3584,11 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     )}
                   </div>
 
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
-                        Pagamentos recebidos (fluxo de caixa)
-                      </span>
-                    </div>
-                    {pagamentos.length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                        Nenhum pagamento lançado pra essa moto ainda — lance no Caixa escolhendo a moto,
-                        ou pelo botão de pagamento aqui em cima quando estiver atrasado.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex justify-between text-xs mb-1" style={{ color: theme.mint, fontWeight: 700 }}>
-                          <span>Total recebido</span>
-                          <span>{formatCurrency(pagamentos.reduce((s, p) => s + Number(p.valor), 0))}</span>
-                        </div>
-                        {pagamentos.map((p) => (
-                          <div key={p.id} className="flex items-center justify-between text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                            <span style={{ color: theme.text }}>
-                              {formatDate(p.data)} · {p.categoria || "Sem categoria"}
-                            </span>
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(p.valor)}</span>
-                          </div>
-                        ))}
-                      </>
-                    )}
+
+                  </div>
                   </div>
 
-                  <div className="mb-5">
+                  <div style={{ marginTop: "var(--rd-s4)" }}>
                     <button
                       onClick={() => setVerCadastro((v) => (v === moto.id ? null : moto.id))}
                       className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide"
@@ -3620,26 +3649,6 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     </Collapse>
                   </div>
 
-                  {permissoes.podeEditar && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setModal({ type: "moto", mode: "editar", moto })}
-                        className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                        style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                      >
-                        <Pencil size={12} /> Editar
-                      </button>
-                      {moto.status !== "alugada" && (
-                        <button
-                          onClick={() => excluirMoto(moto.id)}
-                          className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                          style={{ border: `1px solid ${theme.cardBorder}`, color: theme.coral }}
-                        >
-                          <Trash2 size={12} /> Excluir
-                        </button>
-                      )}
-                    </div>
-                  )}
                 </div>
               </Collapse>
             </div>
@@ -7735,17 +7744,30 @@ function AppAutenticado({ perfil, onSignOut }) {
           }
         }
 
-        /* BARRA LATERAL — mesma história do dvh: presa em 100vh, o pé da barra
-           (Ajustes e o perfil) ficava embaixo da barra do Safari, fora de alcance. */
+        /* FICHA ABERTA (moto e cliente) — no desktop a ficha era uma coluna só
+           esticada numa tela de 1200px: metade da largura vazia e uma barra de
+           rolagem de página inteira pra ver o fim. Em duas colunas ela cabe quase
+           sempre sem rolar, e as seções ficam com a mesma cara das do resto do site. */
+        .mbr-ficha-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: var(--rd-s5);
+          align-items: start;
+        }
+        .mbr-ficha-col { display: flex; flex-direction: column; gap: var(--rd-s5); min-width: 0; }
+        @media (min-width: 1024px) {
+          .mbr-ficha-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 40px; }
+        }
+
+        /* BARRA LATERAL — fixa, nunca rola com a página. A altura em dvh é o que
+           mantém o pé dela (Ajustes e perfil) DENTRO do enquadramento: com 100vh o
+           Safari do iPad mede a tela sem as próprias barras, e o rodapé da barra
+           acabava escondido atrás da barra de baixo. */
         .mbr-lateral {
           height: 100vh;
           height: 100dvh;
-          overflow-x: hidden;
-          overflow-y: auto;
-          scrollbar-width: none;
-          -ms-overflow-style: none;
+          overflow: hidden;
         }
-        .mbr-lateral::-webkit-scrollbar { display: none; }
 
         /* o shell também em dvh: com 100vh o iPad ganhava uns pixels a mais de página
            do que cabe na tela, e a Visão geral travada ainda balançava no dedo */
@@ -7758,7 +7780,7 @@ function AppAutenticado({ perfil, onSignOut }) {
           className="mbr-desktop-only mbr-lateral"
           style={{
             flexDirection: "column",
-            gap: 22,
+            gap: 26,
             width: larguraMenu,
             flex: "none",
             position: "sticky",
@@ -7880,10 +7902,9 @@ function AppAutenticado({ perfil, onSignOut }) {
             })}
           </div>
 
-          {/* Ajustes e perfil ficavam colados no pé da barra (marginTop:auto), com um
-              vazio enorme no meio — e, no iPad, escondidos atrás da barra do Safari.
-              Agora vêm logo depois do menu, sempre à vista. */}
-          <div className="flex flex-col" style={{ gap: 3, paddingTop: 4, borderTop: "1px solid var(--rd-border-soft)" }}>
+          {/* Ajustes e perfil ficam no pé da barra — o que os escondia no iPad era a
+              altura em vh (ver .mbr-lateral), não o lugar deles */}
+          <div className="flex flex-col" style={{ gap: 3, marginTop: "auto" }}>
             <button
               onClick={() => setTab("config")}
               data-active={tab === "config"}
@@ -7906,6 +7927,8 @@ function AppAutenticado({ perfil, onSignOut }) {
               style={{
                 gap: 10,
                 padding: 10,
+                borderTop: "1px solid var(--rd-border-soft)",
+                marginTop: 8,
                 minWidth: 0,
                 justifyContent: menuRecolhido ? "center" : "flex-start" }}
               title={menuRecolhido ? perfil?.username : undefined}
