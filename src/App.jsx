@@ -945,7 +945,7 @@ const inputStyle = {
 // input[type=date] tem um controle nativo (o ícone do calendário) que o navegador
 // desenha com um "box" próprio, maior que o de um input de texto comum, mesmo com o
 // padding igual — height explícito força os dois a ficarem do mesmo tamanho
-const dateInputStyle = { ...inputStyle, height: 41 };
+const dateInputStyle = { ...inputStyle, height: 41, lineHeight: "19px" };
 
 function SelectField({ value, onChange, options }) {
   return (
@@ -3694,7 +3694,6 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
   const [verTodosFixos, setVerTodosFixos] = useState(false);
   const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
-  const [verGrafico, setVerGrafico] = useState(false);
   const [grupoAberto, setGrupoAberto] = useState(null);
   // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
   // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
@@ -3725,7 +3724,6 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
   const { fixoMensalSaida, fixoMensalEntrada, avulsosPendentesSaida, avulsosPendentesEntrada, previstoSaida12Meses, previstoEntrada12Meses, saldoPrevisto12Meses } =
     totaisFuturos(futuros, motos);
   const contratos = contratosComoFuturos(motos);
-  const projecao = projecaoFuturosPorMes([...futuros, ...contratos], 12);
 
   const recorrentes = futuros.filter((f) => f.recorrente);
   // avulso confirmado (pago) já virou um lançamento real em "Lançado" — some daqui, não
@@ -4040,7 +4038,7 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
           {cobrancas.depois.length > 0 && (
             <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${theme.divider}` }}>
               <div className="text-xs uppercase tracking-wide mb-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Ainda não cobra
+                A partir do mês que vem
               </div>
               <div className="flex flex-col">
                 {cobrancas.depois.map((it, i) => (
@@ -4149,62 +4147,6 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
             )}
           </>
         )}
-      </div>
-
-      {/* o gráfico é consulta, não rotina: ocupava 280px no meio do caminho entre a
-          agenda e as contas. Fica no fim, fechado, e abre quando a pessoa quiser */}
-      <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-        <button
-          onClick={() => setVerGrafico((v) => !v)}
-          className="w-full flex items-center justify-between"
-          style={{ minHeight: 32 }}
-        >
-          <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }}>Previsão por mês</h3>
-          {verGrafico ? <ChevronUp size={18} color={theme.textMuted} /> : <ChevronDown size={18} color={theme.textMuted} />}
-        </button>
-        <Collapse open={verGrafico}>
-          <div className="pt-3">
-            {futuros.length === 0 ? (
-              <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Cadastre uma conta futura pra ver a previsão aqui.
-              </div>
-            ) : (
-              <div style={{ width: "100%", height: 280 }}>
-                <ResponsiveContainer>
-                  <ComposedChart data={projecao} margin={{ left: -12 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder} vertical={false} />
-                    <XAxis dataKey="mes" stroke={theme.textMuted} fontSize={11} axisLine={false} tickLine={false} />
-                    <YAxis stroke={theme.textMuted} fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
-                    <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
-                    <Legend />
-                    <Bar dataKey="entrada" name="A receber" fill={theme.mint} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="saida" name="A pagar" fill={theme.coral} radius={[4, 4, 0, 0]} />
-                    <Line
-                      type="monotone"
-                      dataKey="saldo"
-                      name="Saldo"
-                      stroke={theme.amber}
-                      strokeWidth={2.5}
-                      dot={{ r: 3, fill: theme.amber, strokeWidth: 0 }}
-                      activeDot={{ r: 5 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="saldo"
-                      stroke={mixColors(theme.amber, "#FFFFFF", 0.65)}
-                      strokeOpacity={0.55}
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                      legendType="none"
-                      className="mbr-linha-cometa"
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-        </Collapse>
       </div>
 
       {modal && (

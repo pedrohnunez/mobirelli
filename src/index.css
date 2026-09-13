@@ -12,12 +12,41 @@ body {
   margin: 0;
 }
 
-/* o ícone nativo do calendário em input[type=date] carrega um padding próprio do
-   navegador que engorda a altura do campo mesmo com o CSS igual ao dos outros
-   inputs — zera esse padding pra ele só ocupar o espaço do ícone em si */
+/* input[type=date] no Safari (iPad/iPhone) não é um campo de texto: o navegador
+   desenha um controle próprio, com altura e centralização dele, que ignora o
+   padding/height do CSS e vira um "cardzão" bem mais alto que os outros campos.
+   As regras abaixo desligam essa aparência nativa e mandam o valor se comportar
+   como texto comum, alinhado à esquerda, pra ficar do mesmo tamanho de um input
+   normal nos dois navegadores. */
+input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  box-sizing: border-box;
+  text-align: left;
+  min-height: 0;
+  line-height: 1.25;
+}
+
+/* o valor em si (dd/mm/aaaa) — no Safari ele vem com altura mínima e margem próprias */
+input[type="date"]::-webkit-date-and-time-value {
+  text-align: left;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  line-height: 1.25;
+}
+
+input[type="date"]::-webkit-datetime-edit {
+  padding: 0;
+  line-height: 1.25;
+}
+
+/* o ícone do calendário carrega um padding próprio que também engorda a altura */
 input[type="date"]::-webkit-calendar-picker-indicator {
   padding: 0;
   margin: 0;
+  opacity: 0.55;
 }
 
 /* o site é desenhado só pro modo retrato (vertical). No manifest.json existe
