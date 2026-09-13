@@ -23,6 +23,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  Tag,
   Wrench,
   Trash2,
   Pencil,
@@ -254,6 +255,7 @@ function manutencoesDaMoto(moto, lancamentos) {
       data: l.data,
       descricao: l.descricao || l.categoria || "Manutenção",
       valorGasto: l.valor,
+      doCaixa: true,
     }));
   return [...manuais, ...doCaixa].sort((a, b) => (a.data < b.data ? 1 : -1));
 }
@@ -319,12 +321,15 @@ function primeiraCobrancaDoContrato(contrato) {
 }
 
 // o contrato já pode ser cobrado no mês "mesKey"? (mesKey no formato YYYY-MM)
+//
+// A data de término NÃO trava a cobrança. Enquanto o contrato continuar sendo o contrato
+// atual da moto, o mês é cobrado: se a moto ainda está com o cliente e ninguém encerrou o
+// contrato, ou ele foi renovado ou vai ser encerrado depois — nos dois casos o aluguel
+// desse mês é devido. Quem para de cobrar é o botão "Encerrar contrato", não o calendário.
 function contratoCobraNoMes(contrato, mesKey) {
   const primeira = primeiraCobrancaDoContrato(contrato);
   if (!primeira) return true;
-  if (mesKey < primeira.slice(0, 7)) return false;
-  const fim = contrato?.dataTermino;
-  return !fim || mesKey <= fim.slice(0, 7);
+  return mesKey >= primeira.slice(0, 7);
 }
 
 function contratosComoFuturos(motos) {
@@ -3001,11 +3006,16 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     await persistLancamentos([...(lancamentos || []), lancamento]);
   };
 
-  // reclassifica um gasto que já está no Caixa como manutenção — lançamentos antigos,
-  // feitos antes do campo "Moto dessa manutenção" existir, ficaram com a natureza padrão
-  // e por isso apareciam em "Custos" em vez de "Manutenções"
-  const marcarComoManutencao = async (id) => {
-    await persistLancamentos((lancamentos || []).map((l) => (l.id === id ? { ...l, natureza: "Manutenção" } : l)));
+  // clicar num gasto da ficha abre o lançamento dele no Caixa pra editar — é ali que se
+  // muda a natureza, e é a natureza que decide se ele aparece em Manutenções ou em Custos
+  const abrirLancamentoDaMoto = (id) => {
+    const lanc = (lancamentos || []).find((l) => l.id === id);
+    if (lanc) setModal({ type: "lancamento", lancamento: lanc });
+  };
+
+  const salvarLancamentoDaMoto = async (lancamento) => {
+    await persistLancamentos((lancamentos || []).map((l) => (l.id === lancamento.id ? { ...l, ...lancamento } : l)));
+    setModal(null);
   };
 
   const salvarCustoExtra = async (moto, custo) => {
@@ -3358,16 +3368,20 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     borderTop: "1px solid var(--rd-border-soft)",
                     paddingTop: "var(--rd-s5)" }}
                 >
-                  <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-5">
-                    {moto.modelo || "Modelo não informado"}
+                  <div className="flex items-baseline flex-wrap mb-3" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: theme.text }}>
+                      {moto.modelo || "Modelo não informado"}
+                    </span>
+                    <span style={{ fontSize: 12, color: theme.textFaint }}>
+                      {[moto.anoModelo, moto.cor].filter(Boolean).join(" · ")}
+                    </span>
                   </div>
 
-                  <div className="mb-5">
-                    <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: theme.textFaint }}>
-                      Contrato
-                    </div>
+                  <div className="mb-4">
                     {moto.contratoAtual ? (
-                      <div className="rounded-xl p-3" style={{ background: theme.card2 }}>
+                      /* sem o bloco escuro por dentro do cartão: um fio na esquerda marca
+                         o contrato sem criar uma "caixa dentro da caixa" */
+                      <div style={{ borderLeft: "2px solid var(--rd-brand)", paddingLeft: 12 }}>
                         {vencido && (
                           <div className="mb-2">
                             <div className="flex items-center gap-1.5" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
@@ -3399,16 +3413,16 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                             1ª cobrança em {monthLabel(primeiraCobrancaDoContrato(moto.contratoAtual).slice(0, 7))}
                           </div>
                         )}
-                        <div className="flex items-center justify-between mb-1">
-                          <span style={{ color: theme.text, fontWeight: 600 }}>{cliente?.nome || "Cliente"}</span>
-                          <span style={{ color: theme.amber, fontFamily: HEAD_FONT, fontSize: 17 }}>
+                        <div className="flex items-baseline justify-between flex-wrap" style={{ gap: 8 }}>
+                          <span style={{ color: theme.text, fontWeight: 700, fontSize: 14 }}>{cliente?.nome || "Cliente"}</span>
+                          <span style={{ color: theme.amber, fontWeight: 700, fontSize: 15 }}>
                             {formatCurrency(moto.contratoAtual.valorMensal)}/mês
                           </span>
                         </div>
-                        <div style={{ color: theme.textMuted, fontSize: 12 }}>
+                        <div style={{ color: theme.textFaint, fontSize: 11.5, marginTop: 2 }}>
                           {moto.contratoAtual.numeroClienteMoto}º cliente · contrato nº {moto.contratoAtual.numeroContrato}
                           {moto.contratoAtual.dataInicio && ` · alugou em ${formatDate(moto.contratoAtual.dataInicio)}`}
-                          {diaVencimentoDoContrato(moto.contratoAtual) && ` · pagamento todo dia ${diaVencimentoDoContrato(moto.contratoAtual)}`}
+                          {diaVencimentoDoContrato(moto.contratoAtual) && ` · paga todo dia ${diaVencimentoDoContrato(moto.contratoAtual)}`}
                           {moto.contratoAtual.dataTermino && ` · até ${formatDate(moto.contratoAtual.dataTermino)}`}
                         </div>
                         {contratoAnexosOf(moto.contratoAtual).length > 0 && (
@@ -3452,12 +3466,12 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     )}
                   </div>
 
-                  <div className="mb-5">
+                  <div className="mb-4">
                     <MotoTrackingBlock link={moto.linkRastreamento || config?.linkRastreioGeral} placa={moto.placa} />
                   </div>
 
-                  <div className="mb-5">
-                    <div className="flex items-center justify-between mb-2">
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1.5">
                       <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
                         Manutenções
                       </span>
@@ -3475,29 +3489,19 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                       <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhuma registrada.</div>
                     ) : (
                       [...manutencoesDaMoto(moto, lancamentos)].reverse().map((mnt) => (
-                        <div key={mnt.id} className="flex items-center justify-between gap-2 text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                          <span style={{ color: theme.text }}>
-                            {formatDate(mnt.data)} · {mnt.descricao}
-                          </span>
-                          <span className="flex items-center gap-2 flex-shrink-0">
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(mnt.valorGasto)}</span>
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={() => excluirManutencao(moto, mnt.id)}
-                                className="flex items-center justify-center mbr-hover-grow"
-                                style={{ color: theme.coral, width: 44, height: 44, margin: "-12px -10px -12px 0" }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </span>
-                        </div>
+                        <LinhaGastoDaMoto
+                          key={mnt.id}
+                          item={mnt}
+                          podeEditar={permissoes.podeEditar}
+                          onEditar={() => abrirLancamentoDaMoto(mnt.id)}
+                          onExcluir={() => excluirManutencao(moto, mnt.id)}
+                        />
                       ))
                     )}
                   </div>
 
-                  <div className="mb-5">
-                    <div className="flex items-center justify-between mb-2">
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1.5">
                       <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
                         Custos
                       </span>
@@ -3515,39 +3519,19 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                       <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhum registrado.</div>
                     ) : (
                       [...custosDaMoto(moto, lancamentos)].reverse().map((c) => (
-                        <div key={c.id} className="flex items-center justify-between gap-2 text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                          <span style={{ color: theme.text }}>
-                            {formatDate(c.data)} · {c.descricao}
-                          </span>
-                          <span className="flex items-center gap-2 flex-shrink-0">
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(c.valorGasto)}</span>
-                            {permissoes.podeEditar && c.doCaixa && (
-                              <button
-                                onClick={() => marcarComoManutencao(c.id)}
-                                title="Mover pra Manutenções (muda a natureza do lançamento no caixa)"
-                                className="text-xs font-semibold rounded-lg px-2 py-1"
-                                style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText, whiteSpace: "nowrap" }}
-                              >
-                                é manutenção
-                              </button>
-                            )}
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={() => excluirCustoExtra(moto, c.id)}
-                                className="flex items-center justify-center mbr-hover-grow"
-                                style={{ color: theme.coral, width: 44, height: 44, margin: "-12px -10px -12px 0" }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </span>
-                        </div>
+                        <LinhaGastoDaMoto
+                          key={c.id}
+                          item={c}
+                          podeEditar={permissoes.podeEditar}
+                          onEditar={() => abrirLancamentoDaMoto(c.id)}
+                          onExcluir={() => excluirCustoExtra(moto, c.id)}
+                        />
                       ))
                     )}
                   </div>
 
-                  <div className="mb-5">
-                    <div className="flex items-center justify-between mb-2">
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1.5">
                       <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
                         Pagamentos recebidos (fluxo de caixa)
                       </span>
@@ -3688,6 +3672,21 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
       {modal?.type === "custoExtra" && (
         <CustoExtraModal onClose={() => setModal(null)} onSave={(c) => salvarCustoExtra(modal.moto, c)} />
       )}
+      {/* editar o gasto direto da ficha da moto — mesma tela do Caixa, então a natureza
+          (que decide entre Manutenções e Custos) se muda aqui */}
+      {modal?.type === "lancamento" && (
+        <LancamentoModal
+          lancamento={modal.lancamento}
+          editando
+          motos={motos}
+          onClose={() => setModal(null)}
+          onSave={salvarLancamentoDaMoto}
+          onDelete={async () => {
+            await persistLancamentos((lancamentos || []).filter((l) => l.id !== modal.lancamento.id));
+            setModal(null);
+          }}
+        />
+      )}
       {modal?.type === "consulta" && <ConsultaPlacaModal onClose={() => setModal(null)} />}
       {preview && <PdfViewer url={preview.url} title={preview.title} onClose={() => setPreview(null)} />}
     </div>
@@ -3772,8 +3771,25 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
         </>
       )}
 
-      <FieldLabel>Categoria</FieldLabel>
-      <input style={inputStyle} value={form.categoria} onChange={set("categoria")} placeholder="Mensalidade, manutenção, combustível..." />
+      <FieldLabel>Nome do lançamento</FieldLabel>
+      <input style={inputStyle} value={form.categoria} onChange={set("categoria")} placeholder="Mensalidade, troca de óleo, despachante..." />
+
+      {/* com moto escolhida, o lançamento também entra na ficha dela — e é a NATUREZA
+          que decide em qual lista: "Manutenção" cai em Manutenções, o resto em Custos */}
+      {form.motoId && form.tipo === "saida" && (
+        <div
+          className="flex items-center -mt-2 mb-3"
+          style={{ gap: 7, fontSize: 12, color: ehManutencao ? "var(--rd-attention-text)" : "var(--rd-text-muted)" }}
+        >
+          {ehManutencao ? <Wrench size={13} /> : <Tag size={13} />}
+          Vai aparecer em <b>{ehManutencao ? "Manutenções" : "Custos"}</b> da moto{" "}
+          {(() => {
+            const m = (motos || []).find((x) => x.id === form.motoId);
+            return m ? formatPlaca(m.placa) : "";
+          })()}
+          . Pra mudar, é só trocar a natureza.
+        </div>
+      )}
       <Row2>
         <div>
           <FieldLabel>Valor (R$)</FieldLabel>
@@ -3792,7 +3808,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
           className="text-xs font-semibold mb-3"
           style={{ color: theme.mint, fontFamily: BODY_FONT }}
         >
-          + Mais opções (moto, forma de pagamento, parcelas, detalhe extra)
+          + Mais opções
         </button>
       ) : (
         <>
@@ -4060,7 +4076,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
           className="text-xs font-semibold mb-3"
           style={{ color: theme.mint, fontFamily: BODY_FONT }}
         >
-          + Mais opções (natureza, moto, detalhe extra)
+          + Mais opções
         </button>
       ) : (
         <>
@@ -4399,20 +4415,16 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     <div>
       {(cobrancas.agora.length > 0 || cobrancas.depois.length > 0) && (
         <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
-          <h3 style={{ fontSize: 16, color: "var(--rd-text)" }} className="mb-1">
-            Agenda de cobranças
-          </h3>
-          <div className="text-xs mb-3" style={{ color: "var(--rd-text-dim)" }}>
-            Quem você cobra em {monthLabel(mesAtualKey)}
+          <div className="flex items-baseline flex-wrap mb-3" style={{ gap: 10 }}>
+            <span style={RD_LABEL}>Recebimentos do mês</span>
             {cobrancas.aReceber > 0 && (
-              <>
-                {" · falta entrar "}
-                <span style={{ color: "var(--rd-text)", fontWeight: 700 }}>{formatCurrency(cobrancas.aReceber)}</span>
-              </>
+              <span className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
+                falta entrar <span style={{ color: "var(--rd-text)", fontWeight: 700 }}>{formatCurrency(cobrancas.aReceber)}</span>
+              </span>
             )}
             {cobrancas.atrasadas > 0 && (
-              <span style={{ color: "var(--rd-negative)", fontWeight: 700 }}>
-                {` · ${cobrancas.atrasadas} atrasad${cobrancas.atrasadas === 1 ? "a" : "as"}`}
+              <span className="text-xs" style={{ color: "var(--rd-negative)", fontWeight: 700 }}>
+                {cobrancas.atrasadas} atrasad{cobrancas.atrasadas === 1 ? "a" : "as"}
               </span>
             )}
           </div>
@@ -5754,6 +5766,43 @@ function LinhaConta({ item }) {
   );
 }
 
+// linha de gasto na ficha da moto (Manutenções ou Custos). O que veio do Caixa abre
+// pra editar no toque — é lá que se muda a natureza, e a natureza é quem decide em qual
+// das duas listas o gasto aparece
+function LinhaGastoDaMoto({ item, podeEditar, onEditar, onExcluir }) {
+  const editavel = podeEditar && item.doCaixa;
+  return (
+    <div
+      className="flex items-center justify-between text-xs"
+      style={{ gap: 8, padding: "5px 0", borderTop: "1px solid var(--rd-row-border)" }}
+    >
+      <button
+        onClick={editavel ? onEditar : undefined}
+        className="flex items-center text-left truncate"
+        style={{ gap: 7, minWidth: 0, flex: 1, background: "none", cursor: editavel ? "pointer" : "default", color: "var(--rd-text)" }}
+      >
+        <span className="truncate">
+          {formatDate(item.data)} · {item.descricao}
+        </span>
+        {editavel && <Pencil size={11} style={{ flex: "none", color: "var(--rd-text-faint)" }} />}
+      </button>
+      <span className="flex items-center flex-shrink-0" style={{ gap: 8 }}>
+        <span style={{ color: "var(--rd-text-dim)" }}>{formatCurrency(item.valorGasto)}</span>
+        {podeEditar && (
+          <button
+            onClick={onExcluir}
+            aria-label="Excluir"
+            className="flex items-center justify-center mbr-hover-grow"
+            style={{ color: "var(--rd-negative)", width: 30, height: 30, marginRight: -6, background: "none" }}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
   return (
     <div className="flex flex-col" style={{ gap: 1 }}>
@@ -6092,7 +6141,13 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
   const ticketMedio = contratosAtivos.length
     ? contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0) / contratosAtivos.length
     : 0;
-  const investimentoFrota = motos.reduce((s, m) => s + Number(m.valorCompra || 0), 0);
+  // investimento na frota = o que foi pago pelas motos MAIS o que foi gasto pra colocar
+  // cada uma na rua (despachante, emplacamento, comissão...). Tudo que está em "Custos"
+  // da moto é dinheiro investido nela, não custo de operação do mês.
+  const investimentoFrota = motos.reduce(
+    (s, m) => s + Number(m.valorCompra || 0) + custosDaMoto(m, lancamentos).reduce((t, c) => t + Number(c.valorGasto || 0), 0),
+    0
+  );
 
   // dia de vencimento mais próximo entre os contratos em dia — usado no cartão de
   // Cobrança quando não há nada em atraso ("próx. venc. em X dias")
