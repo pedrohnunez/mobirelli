@@ -64,7 +64,7 @@
   /* medidas derivadas — os únicos "paddings de composição" do site */
   --rd-pad-card-y: 20px;   /* altura interna de um card */
   --rd-pad-card-x: 22px;   /* largura interna de um card */
-  --rd-pad-row-y: 18px;    /* altura interna de uma linha de tabela */
+  --rd-pad-row-y: 13px;    /* altura interna de uma linha de tabela */
   --rd-pad-row-x: 20px;    /* MESMA calha do cabeçalho da tabela — é o que
                               faz rótulo e conteúdo ficarem na mesma coluna */
   --rd-gap-secao: 20px;    /* entre blocos de uma tela */

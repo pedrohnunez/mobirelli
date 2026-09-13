@@ -501,6 +501,26 @@ const isOverdue = (dateStr) => {
 // dia do mês em que o cliente paga a mensalidade — contratos antigos guardavam uma
 // data completa (dataVencimento), então aproveita o dia dela se o campo novo (diaVencimento)
 // ainda não tiver sido preenchido
+// próximo vencimento a partir de hoje: a data (dd/mm) e quantos dias faltam. Mostrar
+// só "dia 12" obrigava a fazer a conta de cabeça pra saber se era essa semana ou a que vem
+function proximoVencimento(contrato) {
+  const dia = diaVencimentoDoContrato(contrato);
+  if (!dia) return null;
+  const hoje = new Date();
+  const hojeZero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+  const noMes = (ano, mes) => {
+    const ultimo = new Date(ano, mes + 1, 0).getDate();
+    return new Date(ano, mes, Math.min(dia, ultimo));
+  };
+  let venc = noMes(hoje.getFullYear(), hoje.getMonth());
+  if (venc < hojeZero) venc = noMes(hoje.getFullYear(), hoje.getMonth() + 1);
+  const dias = Math.round((venc - hojeZero) / (1000 * 60 * 60 * 24));
+  return {
+    data: `${String(venc.getDate()).padStart(2, "0")}/${String(venc.getMonth() + 1).padStart(2, "0")}`,
+    dias,
+  };
+}
+
 function diaVencimentoDoContrato(contrato) {
   if (!contrato) return null;
   if (contrato.diaVencimento) return Number(contrato.diaVencimento);
@@ -531,6 +551,10 @@ const isContratoVencido = (contrato, pagamentos) => {
   if (hojeZero <= vencimentoDoMes) return false;
   return !pagouNoMes(pagamentos, mesAtual);
 };
+
+// valor curto pra tabela: "R$ 1.590" — na coluna estreita os centavos só atrapalham
+const formatCurrencyCurto = (v) =>
+  `R$ ${Math.round(Number(v) || 0).toLocaleString("pt-BR")}`;
 
 const monthLabel = (key) => {
   const [y, m] = key.split("-");
@@ -1640,18 +1664,19 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
             <span></span>
           </div>
 
-          <div className="flex flex-col" style={{ gap: 10 }}>
-            {filtrados.map((c) => {
+          {/* uma tabela só, com as linhas separadas por um fio — igual à Frota */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            {filtrados.map((c, iLinha) => {
           const motoVinculada = motos.find((m) => m.contratoAtual?.clienteId === c.id);
           const aberto = expandido === c.id;
           return (
-            <div key={c.id} className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            <div key={c.id} style={{ borderTop: iLinha === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
               <button
                 className="w-full text-left mbr-desktop-grid mbr-tab-row mbr-grid-clientes"
                 onClick={() => setExpandido(aberto ? null : c.id)}
               >
                 <div className="flex flex-col min-w-0" style={{ gap: 4 }}>
-                  <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
+                  <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
                   <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{[c.cidade, c.estado].filter(Boolean).join("/") || "—"}</span>
                 </div>
                 <span className="truncate" style={{ minWidth: 0, fontFamily: "ui-monospace, monospace", fontSize: 12.5, color: "var(--rd-text-muted)" }}>
@@ -1695,7 +1720,7 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
                     <Users size={16} color={motoVinculada ? "var(--rd-brand-light)" : "var(--rd-attention)"} />
                   </div>
                   <div className="flex flex-col min-w-0" style={{ gap: 3 }}>
-                    <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
+                    <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
                     <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
                       {motoVinculada ? `Com a moto ${formatPlaca(motoVinculada.placa)}` : "Sem moto no momento"}
                     </span>
@@ -3013,6 +3038,14 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     return Math.max(0, Math.floor((new Date() - inicio) / (1000 * 60 * 60 * 24)));
   };
 
+  // quanto uma moto parada deixa de render por dia — média do que as alugadas rendem
+  const custoDiarioParada = (() => {
+    const ativos = motos.filter((m) => m.contratoAtual && Number(m.contratoAtual.valorMensal) > 0);
+    if (ativos.length === 0) return 0;
+    const media = ativos.reduce((s2, m) => s2 + Number(m.contratoAtual.valorMensal), 0) / ativos.length;
+    return Math.round(media / 30);
+  })();
+
   const clientesSemContrato = clientes.filter((c) => !motos.some((mm) => mm.contratoAtual?.clienteId === c.id));
 
   const filtros = [
@@ -3034,22 +3067,26 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
             {contagemStatus.disponivel} parada{contagemStatus.disponivel === 1 ? "" : "s"}
           </span>
         </div>
-        <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
-          <button
-            onClick={() => setModal({ type: "consulta" })}
-            className="flex items-center"
-            style={{
-              gap: 8,
-              background: "var(--rd-surface-2)",
-              border: "1px solid var(--rd-border)",
-              color: "var(--rd-text-muted)",
-              borderRadius: 999,
-              padding: "9px 16px",
-              fontSize: 13,
-              fontWeight: 600 }}
-          >
-            <Search size={14} strokeWidth={2.75} /> Consultar placa
-          </button>
+        {/* minWidth:0 + maxWidth aqui é o que deixa a faixa de filtros ENCOLHER no
+            celular; sem isso ela mantinha a largura do conteúdo e empurrava a página */}
+        <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s2)", marginLeft: "auto", minWidth: 0, maxWidth: "100%" }}>
+          <div className="mbr-filtros" style={{ flex: "1 1 auto", minWidth: 0 }}>
+            {filtros.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFiltroStatus(f.id)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  fontSize: 12.5,
+                  fontWeight: filtroStatus === f.id ? 700 : 600,
+                  background: filtroStatus === f.id ? "var(--rd-brand)" : "transparent",
+                  color: filtroStatus === f.id ? "#F0F5EE" : f.id === "disponivel" ? "var(--rd-attention)" : "var(--rd-text-dim)" }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
           {permissoes.podeEditar && (
             <button
               onClick={() => setModal({ type: "moto", mode: "novo", moto: emptyMoto() })}
@@ -3062,8 +3099,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
         </div>
       </div>
 
-      {/* linha 2 — busca e filtros, o "painel de garimpo" da tela */}
-      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+      {/* linha 2 — busca e consulta de placa */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)", marginTop: "calc(var(--rd-gap-secao) * -0.5)" }}>
         <div className="relative" style={{ flex: "1 1 240px", minWidth: 0 }}>
           <Search size={15} strokeWidth={2.75} style={{ position: "absolute", left: 14, top: 12, color: "var(--rd-text-dim)" }} />
           <input
@@ -3081,22 +3118,22 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
             onChange={(e) => setBusca(e.target.value)}
           />
         </div>
-        <div className="mbr-filtros" style={{ flex: "0 1 auto", minWidth: 0 }}>
-          {filtros.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setFiltroStatus(f.id)}
-              style={{
-                padding: "6px 14px",
-                borderRadius: 999,
-                fontSize: 12.5,
-                fontWeight: filtroStatus === f.id ? 700 : 600,
-                background: filtroStatus === f.id ? "var(--rd-brand)" : "transparent",
-                color: filtroStatus === f.id ? "#F0F5EE" : f.id === "disponivel" ? "var(--rd-attention)" : "var(--rd-text-dim)" }}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex items-center" style={{ gap: "var(--rd-s2)" }}>
+          <button
+            onClick={() => setModal({ type: "consulta" })}
+            className="flex items-center"
+            style={{
+              gap: 8,
+              background: "var(--rd-surface-2)",
+              border: "1px solid var(--rd-border)",
+              color: "var(--rd-text-muted)",
+              borderRadius: 999,
+              padding: "9px 16px",
+              fontSize: 13,
+              fontWeight: 600 }}
+          >
+            <Search size={14} strokeWidth={2.75} /> Consultar placa
+          </button>
         </div>
       </div>
 
@@ -3117,8 +3154,11 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
             <span></span>
           </div>
 
-          <div className="flex flex-col" style={{ gap: 10 }}>
-            {linhas.map((moto) => {
+          {/* uma tabela só, com as linhas separadas por um fio — antes cada moto era um
+              cartão solto com 10px de vão, o que empurrava a lista pra três vezes a
+              altura e tirava a leitura de tabela (coluna embaixo de coluna) */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            {linhas.map((moto, iLinha) => {
           const pagamentos = pagamentosDaMoto(moto, lancamentos);
           const vencido = moto.status === "alugada" && isContratoVencido(moto.contratoAtual, pagamentos);
           const mesAtualKey = todayISO().slice(0, 7);
@@ -3127,11 +3167,17 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
           const cliente = clientes.find((c) => c.id === moto.contratoAtual?.clienteId);
           const aberto = expandido === moto.id;
           const diaVenc = diaVencimentoDoContrato(moto.contratoAtual);
+          const venc = proximoVencimento(moto.contratoAtual);
           const payback = paybackDaMoto(moto);
           const parada = moto.status !== "alugada";
           const dias = parada ? diasParadaDaMoto(moto) : null;
           return (
-            <div key={moto.id} className="rounded-2xl overflow-hidden" style={{ background: parada && moto.status === "disponivel" ? "#15120C" : "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            <div
+              key={moto.id}
+              style={{
+                background: parada && moto.status === "disponivel" ? "#15120C" : "transparent",
+                borderTop: iLinha === 0 ? "none" : "1px solid var(--rd-row-border)" }}
+            >
               <button
                 className="w-full text-left mbr-desktop-grid mbr-tab-row mbr-grid-frota"
                 onClick={() => setExpandido(aberto ? null : moto.id)}
@@ -3140,21 +3186,29 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                   <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{formatPlaca(moto.placa)}</span>
                   <span
                     style={{
-                      fontSize: 11,
+                      fontSize: 10.5,
                       fontWeight: 700,
                       alignSelf: "flex-start",
                       borderRadius: 999,
-                      padding: "2px 9px",
+                      padding: "2px 8px",
+                      whiteSpace: "nowrap",
                       color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)",
                       background: parada ? "#2A2115" : "var(--rd-brand)" }}
                   >
-                    {parada ? `${MOTO_STATUS[moto.status]?.label || "Parada"}${dias != null ? ` ${dias}d` : ""}` : "Alugada"}
+                    {/* "Disponível 128 dias" não cabe numa linha e quebrava a etiqueta em
+                        duas — e "Parada" é a palavra que a tela inteira usa (filtro,
+                        contagem do topo, cartão da Visão geral) */}
+                    {parada
+                      ? `${moto.status === "disponivel" ? "Parada" : MOTO_STATUS[moto.status]?.label || "Parada"}${
+                          dias != null ? ` ${dias} dia${dias === 1 ? "" : "s"}` : ""
+                        }`
+                      : "Alugada"}
                   </span>
                 </div>
                 <div className="flex flex-col min-w-0" style={{ gap: 3 }}>
                   {cliente ? (
                     <>
-                      <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{cliente.nome}</span>
+                      <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{cliente.nome}</span>
                       {moto.contratoAtual?.dataInicio ? (
                         <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
                           desde {formatDate(moto.contratoAtual.dataInicio)} · {mesesDesde(moto.contratoAtual.dataInicio)} mes
@@ -3166,22 +3220,30 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                     </>
                   ) : (
                     <>
-                      <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-attention-text)" }}>Sem contrato</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-attention-text)" }}>Sem contrato</span>
+                      {/* se tem gente na fila, essa é a informação que resolve; se não tem,
+                          o que dói é o quanto a moto deixa de render parada */}
                       <span style={{ fontSize: 11.5, color: "var(--rd-attention-text)" }}>
-                        {clientesSemContrato.length > 0 ? `${clientesSemContrato.length} na fila de espera` : "nenhum cliente na fila"}
+                        {clientesSemContrato.length > 0
+                          ? `${clientesSemContrato.length} cliente${clientesSemContrato.length === 1 ? "" : "s"} na fila de espera`
+                          : custoDiarioParada > 0
+                          ? `custa ${formatCurrencyCurto(custoDiarioParada)}/dia parada`
+                          : "nenhum cliente na fila"}
                       </span>
                     </>
                   )}
                 </div>
-                <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rd-text)" }}>
-                  {moto.contratoAtual ? formatCurrency(moto.contratoAtual.valorMensal) : "—"}
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>
+                  {moto.contratoAtual ? formatCurrencyCurto(moto.contratoAtual.valorMensal) : "—"}
                 </span>
                 {moto.contratoAtual ? (
                   <div className="flex flex-col" style={{ gap: 2 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: vencido ? "var(--rd-negative)" : "var(--rd-text)" }}>
-                      {diaVenc ? `dia ${diaVenc}` : "—"}
+                      {venc ? venc.data : diaVenc ? `dia ${diaVenc}` : "—"}
                     </span>
-                    <span style={{ fontSize: 11.5, color: vencido ? "var(--rd-negative)" : "var(--rd-text-dim)" }}>{vencido ? "atrasado" : "em dia"}</span>
+                    <span style={{ fontSize: 11.5, color: vencido ? "var(--rd-negative)" : "var(--rd-text-dim)" }}>
+                      {vencido ? "atrasado" : !venc ? "sem data" : venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`}
+                    </span>
                   </div>
                 ) : (
                   <span style={{ fontSize: 13, color: "var(--rd-text-dim)" }}>—</span>
@@ -7252,17 +7314,16 @@ function AppAutenticado({ perfil, onSignOut }) {
           align-items: center;
         }
 
-        /* "Onde está" é a única coluna que sai quando a tela aperta (<1280px) —
-           é a informação mais dispensável da linha. Payback fica SEMPRE visível:
-           é número de acompanhamento diário, não pode sumir no tablet */
+        /* "Onde está" só some no celular, onde a linha vira cartão de qualquer jeito —
+           no tablet deitado ela cabe junto com o resto, como no rascunho */
         .mbr-col-extra { display: none !important; }
-        @media (min-width: 1280px) {
+        @media (min-width: 1024px) {
           .mbr-col-extra { display: flex !important; }
         }
 
-        .mbr-grid-frota { grid-template-columns: 116px minmax(0, 1.4fr) 124px 112px minmax(0, 1fr) 80px; }
+        .mbr-grid-frota { grid-template-columns: 112px minmax(0, 1.15fr) 108px 100px minmax(0, 0.9fr) 108px 62px; }
         @media (min-width: 1280px) {
-          .mbr-grid-frota { grid-template-columns: 116px minmax(0, 1.5fr) 124px 112px minmax(0, 0.9fr) 132px 80px; }
+          .mbr-grid-frota { grid-template-columns: 116px minmax(0, 1.5fr) 116px 112px minmax(0, 0.95fr) 132px 76px; }
         }
         .mbr-grid-clientes { grid-template-columns: minmax(0, 1.15fr) 150px minmax(0, 1fr) 168px 76px; }
 
