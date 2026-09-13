@@ -7216,24 +7216,20 @@ function AppAutenticado({ perfil, onSignOut }) {
     { id: "fluxo", label: "Caixa", labelMobile: "Caixa", icon: Wallet },
     { id: "rastreio", label: "Rastreamento", labelMobile: "Mapa", icon: Navigation },
   ];
-  // MENU RECOLHÍVEL — a barra lateral come 232px de largura o tempo todo; recolhida ela
-  // vira um trilho fino só de ícones (continua navegável) e devolve esse espaço pro
-  // conteúdo. A escolha fica lembrada entre sessões.
-  const [menuRecolhido, setMenuRecolhido] = useState(() => {
-    try {
-      return localStorage.getItem("mobirelli-menu-recolhido") === "1";
-    } catch {
-      return false;
-    }
-  });
+  // MENU RECOLHÍVEL — a barra lateral come 232px o tempo todo; recolhida ela vira um
+  // trilho fino só de ícones (continua navegável) e devolve esse espaço pro conteúdo.
+  // A regra é por tela: a Visão geral abre com o menu aberto (é o ponto de partida,
+  // dá pra ver pra onde ir); entrar em qualquer outra aba joga a tela pro modo cheio.
+  // Dentro da aba o botão continua valendo — a regra só volta a valer na próxima troca.
+  const [menuRecolhido, setMenuRecolhido] = useState(false);
   useEffect(() => {
-    try {
-      localStorage.setItem("mobirelli-menu-recolhido", menuRecolhido ? "1" : "0");
-    } catch {
-      /* navegador sem storage (aba privada) — o menu só não lembra da escolha */
-    }
-  }, [menuRecolhido]);
+    setMenuRecolhido(tab !== "dashboard");
+  }, [tab]);
   const larguraMenu = menuRecolhido ? 62 : 232;
+
+  // Frota, Clientes e Caixa já desenham o próprio título (com a contagem e os botões
+  // na mesma linha) — o header do shell em cima só repetia a palavra e comia 60px
+  const telaTemTituloProprio = ["motos", "clientes", "fluxo"].includes(tab);
 
   const abaAtual = tabs.find((t) => t.id === tab);
   const tituloTela = abaAtual ? abaAtual.label : "Ajustes";
@@ -7358,7 +7354,10 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-conteudo {
             --mbr-margem-conteudo: 20px;
             border-radius: 18px;
-            margin: 10px 10px 10px 0;
+            margin: 10px;
+            /* com o painel arredondado à vista, uma tela curta deixava ele terminando no
+               meio do caminho, com o fundo do shell sobrando embaixo */
+            min-height: calc(100vh - 20px);
             border: 1px solid var(--rd-border-soft);
             overflow-x: clip;
           }
@@ -7552,10 +7551,12 @@ function AppAutenticado({ perfil, onSignOut }) {
               header sólido em cima de uma faixa vazia. Nas outras abas ele continua
               sticky, empurrando o conteúdo normalmente */}
           <div ref={headerRef} style={tab === "rastreio" ? { position: "absolute", top: 0, left: 0, right: 0, zIndex: 40 } : { position: "sticky", top: 0, zIndex: 40 }}>
-            {/* header de conteúdo — desktop */}
+            {/* header de conteúdo — desktop. Não aparece nas telas que já têm título
+                próprio: ali ele só repetia "Frota" em cima de "Frota" */}
             <header
               className="mbr-desktop-only"
               style={{
+                display: telaTemTituloProprio ? "none" : undefined,
                 alignItems: "center",
                 gap: 16,
                 padding: "20px 28px",
@@ -7569,9 +7570,6 @@ function AppAutenticado({ perfil, onSignOut }) {
                 <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>{tituloTela}</h1>
                 <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>{dataCabecalho}</span>
               </div>
-              {anyError && (
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--rd-negative)" }}>{anyError}</span>
-              )}
             </header>
 
             {/* header compacto — mobile/tablet (<1024px) */}
@@ -7619,6 +7617,17 @@ function AppAutenticado({ perfil, onSignOut }) {
             </header>
           </div>
 
+          {/* o aviso de erro vivia dentro do header do desktop; como ele some nas telas
+              com título próprio, o aviso passou a ter faixa própria pra nunca sumir */}
+          {anyError && (
+            <div
+              className="mbr-desktop-only"
+              style={{ padding: "10px 28px", background: "var(--rd-attention-bg)", borderBottom: "1px solid var(--rd-border-soft)" }}
+            >
+              <span style={{ fontSize: 12, color: "var(--rd-negative)" }}>{anyError}</span>
+            </div>
+          )}
+
           {versaoNovaDisponivel && (
         // a centralização (translateX) fica num wrapper parado — a classe mbr-fade-in
         // anima "transform" (translateY) no elemento visível de dentro; se as duas
@@ -7652,7 +7661,11 @@ function AppAutenticado({ perfil, onSignOut }) {
       )}
 
           <main
-            className={tab === "rastreio" ? "" : "mbr-main-pad-bottom px-4 sm:px-8 pt-5 max-w-5xl mx-auto lg:max-w-7xl"}
+            className={
+              tab === "rastreio"
+                ? ""
+                : `mbr-main-pad-bottom px-4 sm:px-8 pt-5 max-w-5xl mx-auto lg:max-w-7xl${telaTemTituloProprio ? " lg:pt-7" : ""}`
+            }
             // width:100% + minWidth:0 são obrigatórios aqui. O <main> tem "mx-auto" (margem
             // lateral automática, pra centralizar), e margem automática no eixo cruzado
             // DESLIGA o stretch do flex: sem largura explícita, o <main> passa a se medir
