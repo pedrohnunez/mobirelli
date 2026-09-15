@@ -749,6 +749,14 @@ const mesesDesdeISO = (dataISO) => {
   return Math.max(0, (hoje.getFullYear() - d.getFullYear()) * 12 + (hoje.getMonth() - d.getMonth()));
 };
 
+// busca que ignora acento: procurar "celio" tem que achar "Célio"
+const semAcento = (texto) =>
+  (texto || "")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
 // quando alguém "adiciona à tela inicial", o app abre sem barra de navegador e sem botão
@@ -2451,7 +2459,10 @@ function MapToolButton({ icon: Icon, label, onClick, active }) {
 // "mini": versão de miniatura, pro cartão "Onde estão" da Visão geral — mesmo mapa e
 // mesmos pinos, só que sem controles, sem popup, sem gestos (o cartão inteiro é um
 // atalho pra tela de Rastreamento) e atualizando com menos frequência
-function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0, mini = false, onResumo }) {
+const TrackingMap = forwardRef(function TrackingMap(
+  { link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0, mini = false, onResumo, onDevices, onSelecionar, selecionadoId, semControles = false },
+  ref
+) {
   const containerRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef({});
@@ -2469,6 +2480,15 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
   useEffect(() => {
     onResumoRef.current = onResumo;
   }, [onResumo]);
+  const onDevicesRef = useRef(onDevices);
+  useEffect(() => {
+    onDevicesRef.current = onDevices;
+  }, [onDevices]);
+  const onSelecionarRef = useRef(onSelecionar);
+  useEffect(() => {
+    onSelecionarRef.current = onSelecionar;
+  }, [onSelecionar]);
+  const [satelite, setSatelite] = useState(false);
 
   useEffect(() => {
     mostrarRastroRef.current = mostrarRastro;
@@ -2496,7 +2516,8 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       interactive: !mini,
     });
     mapObjRef.current = map;
-    if (!mini) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    // zoom no canto de baixo à direita: em cima ele brigava com o cartão da moto
+    if (!mini) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     // atribuição ao OpenStreetMap/MapLibre é exigida pela licença dos dados do mapa —
     // "compact" mantém isso, só troca a faixa cheia por um botão discreto "i"
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
@@ -2554,7 +2575,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
             el.className = "mbr-map-marker";
             el.innerHTML = rastreioMarkerHtml(placa, cor);
             const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(map);
-            markersRef.current[chave] = { marker, placa, cor, device: d };
+            markersRef.current[chave] = { marker, placa, cor, device: d, el };
 
             // na miniatura o pino não abre nada — o clique é do cartão, que leva pro mapa
             if (!mini) el.addEventListener("click", (ev) => {
@@ -2562,6 +2583,14 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
               const entry = markersRef.current[chave];
               if (!entry) return;
               const ll = entry.marker.getLngLat();
+              // na tela de Rastreio quem mostra os detalhes é o cartão lateral (React),
+              // então o pino só avisa quem foi clicado em vez de abrir o balão do mapa
+              if (onSelecionarRef.current) {
+                seguindoRef.current = chave;
+                map.flyTo({ center: ll, zoom: 15, duration: 600 });
+                onSelecionarRef.current(chave, entry.device);
+                return;
+              }
               // ao clicar numa moto, a câmera passa a "segui-la": a cada atualização de
               // posição (tick) ela recentraliza sozinha, até a pessoa arrastar/dar zoom
               // manualmente no mapa (aí para de seguir — ver listeners de dragstart/zoomstart)
@@ -2649,6 +2678,9 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         // movimento", que é outra coisa: alugada e parada no pátio do cliente é comum.
         const emMovimento = devices.filter((d) => d.icon_color === "green").length;
         onResumoRef.current?.({ emMovimento, total: devices.length });
+        // a tela de Rastreio monta a lista lateral com esses mesmos dados — assim a
+        // lista e os pinos nunca discordam, é a mesma leitura
+        onDevicesRef.current?.(devices);
 
         setStatus("ok");
       } catch {
@@ -2703,6 +2735,52 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
     });
   };
 
+  // o pino da moto escolhida na lista ganha um anel — é o que liga as duas metades da
+  // tela (clicou na lista, o mapa mostra qual é)
+  useEffect(() => {
+    Object.entries(markersRef.current).forEach(([chave, entry]) => {
+      if (!entry.el) return;
+      entry.el.classList.toggle("mbr-map-marker--ativo", chave === String(selecionadoId || ""));
+    });
+  }, [selecionadoId]);
+
+  // SATÉLITE — camada de imagem por cima do mapa vetorial, abaixo dos rótulos (assim
+  // as ruas e cidades continuam legíveis em cima da foto)
+  const alternarSatelite = () => {
+    const map = mapObjRef.current;
+    const novo = !satelite;
+    setSatelite(novo);
+    if (!map) return;
+    if (novo && !map.getSource("satelite")) {
+      const primeiroSimbolo = (map.getStyle()?.layers || []).find((l) => l.type === "symbol")?.id;
+      map.addSource("satelite", {
+        type: "raster",
+        tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize: 256,
+        attribution: "Imagens &copy; Esri",
+      });
+      map.addLayer({ id: "satelite", type: "raster", source: "satelite", paint: { "raster-opacity": 0.92 } }, primeiroSimbolo);
+    }
+    if (map.getLayer("satelite")) map.setLayoutProperty("satelite", "visibility", novo ? "visible" : "none");
+  };
+
+  useImperativeHandle(ref, () => ({
+    centralizar,
+    atualizar: () => tickRef.current?.(),
+    alternarRastro,
+    alternarSatelite,
+    rastro: mostrarRastro,
+    satelite,
+    status,
+    focar: (chave) => {
+      const entry = markersRef.current[String(chave)];
+      const map = mapObjRef.current;
+      if (!entry || !map) return;
+      seguindoRef.current = String(chave);
+      map.flyTo({ center: entry.marker.getLngLat(), zoom: 15, duration: 700 });
+    },
+  }));
+
   return (
     <div
       className={rounded ? "mbr-map rounded-2xl overflow-hidden relative" : "mbr-map overflow-hidden relative"}
@@ -2713,7 +2791,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         "--mbr-bottom-inset": `${bottomInset}px` }}
     >
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-      {!mini && (
+      {!mini && !semControles && (
         <>
           <div className="absolute left-3 flex gap-3 z-10" style={{ top: 12 + topInset }}>
             <MapToolButton icon={Crosshair} label="Centralizar" onClick={centralizar} />
@@ -2757,7 +2835,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       )}
     </div>
   );
-}
+});
 
 function MotoFormModal({ moto, onClose, onSave, title }) {
   const [form, setForm] = useState({
@@ -3922,9 +4000,16 @@ function MotoDetalhe({
   );
 }
 
-function MotosView({ motos, persist, clientes, persistClientes, config, lancamentos, persistLancamentos }) {
+function MotosView({ motos, persist, clientes, persistClientes, config, lancamentos, persistLancamentos, motoInicial, onAbriuMoto }) {
   const [busca, setBusca] = useState("");
   const [expandido, setExpandido] = useState(null);
+  // veio do mapa ("Abrir a ficha"): já entra com a ficha dessa moto aberta
+  useEffect(() => {
+    if (!motoInicial) return;
+    setExpandido(motoInicial);
+    onAbriuMoto?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [motoInicial]);
   const [modal, setModal] = useState(null);
   const [preview, setPreview] = useState(null);
 
@@ -5437,9 +5522,9 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   // busca e filtro por tipo valem sobre o mês que está na tela
   const textoDoItem = (l) => {
     const moto = motos?.find((m) => m.id === l.motoId);
-    return `${l.categoria || ""} ${l.descricao || ""} ${l.natureza || ""} ${moto ? `${moto.placa} ${formatPlaca(moto.placa)}` : ""}`.toLowerCase();
+    return semAcento(`${l.categoria || ""} ${l.descricao || ""} ${l.natureza || ""} ${moto ? `${moto.placa} ${formatPlaca(moto.placa)}` : ""}`);
   };
-  const buscaLimpa = busca.trim().toLowerCase();
+  const buscaLimpa = semAcento(busca.trim());
   const itensFiltrados = itensDoMes.filter(
     (l) => (filtroTipo === "tudo" || l.tipo === filtroTipo) && (!buscaLimpa || textoDoItem(l).includes(buscaLimpa))
   );
@@ -7601,18 +7686,477 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
 =========================================================== */
 const LINK_RASTREIO_PADRAO = "https://web.melocaliza.com.br/sharing/126b3fd40579524296cf586b7625cd97";
 
-function RastreioView({ config, motos, clientes, topInset, bottomInset }) {
-  const link = config?.linkRastreioGeral || LINK_RASTREIO_PADRAO;
+// ---------- leitura dos dados crus do rastreador ----------
+const placaDoDevice = (d) => (d?.name || "").split(" - ")[0].trim();
+const statusDoDevice = (d) => (d?.icon_color === "green" ? "movimento" : d?.icon_color === "yellow" ? "parada" : "offline");
+const RASTREIO_STATUS_ROTULO = { movimento: "Em movimento", parada: "Parada", offline: "Sem sinal" };
+const RASTREIO_STATUS_TOM = {
+  movimento: { cor: "var(--rd-positive)", fundo: "rgba(124,168,113,0.16)" },
+  parada: { cor: "var(--rd-attention-text)", fundo: "var(--rd-attention-bg-2)" },
+  offline: { cor: "var(--rd-negative)", fundo: "rgba(226,106,90,0.14)" },
+};
+
+// o horário do último sinal vem com nome diferente dependendo do rastreador —
+// tentamos os campos conhecidos e, se nenhum vier, a linha simplesmente não mostra
+const dataDoDevice = (d) => {
+  const bruto = d?.dt_tracker || d?.dt_server || d?.time || d?.timestamp || d?.last_update || "";
+  if (!bruto) return null;
+  const data = new Date(String(bruto).replace(" ", "T"));
+  return isNaN(data.getTime()) ? null : data;
+};
+
+const haQuantoTempo = (data) => {
+  if (!data) return "";
+  const seg = Math.max(0, Math.round((Date.now() - data.getTime()) / 1000));
+  if (seg < 60) return "agora";
+  const min = Math.round(seg / 60);
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  const resto = min % 60;
+  if (h < 24) return `há ${h} h${resto ? ` ${String(resto).padStart(2, "0")}` : ""}`;
+  return `há ${Math.floor(h / 24)} d`;
+};
+
+// endereço quando o rastreador manda; senão as coordenadas, que é o que dá pra afirmar
+const localDoDevice = (d) => {
+  const end = d?.address || d?.addr || d?.location || "";
+  if (end) return String(end);
+  const lat = parseFloat(d?.lat);
+  const lng = parseFloat(d?.lng);
+  return lat && lng ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : "";
+};
+
+const kmDoDevice = (d) => {
+  const v = d?.distance ?? d?.today_distance ?? d?.odometer_today;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? `${Math.round(n)} km` : "—";
+};
+
+function ChipStatus({ status, pequeno }) {
+  const tom = RASTREIO_STATUS_TOM[status];
   return (
-    <TrackingMap
-      link={link}
-      height="100%"
-      rounded={false}
-      motos={motos}
-      clientes={clientes}
-      topInset={topInset}
-      bottomInset={bottomInset}
-    />
+    <span
+      style={{
+        fontSize: pequeno ? 9.5 : 10,
+        fontWeight: 700,
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        borderRadius: 999,
+        padding: pequeno ? "2px 7px" : "3px 9px",
+        background: tom.fundo,
+        color: tom.cor,
+        whiteSpace: "nowrap",
+        flex: "none" }}
+    >
+      {RASTREIO_STATUS_ROTULO[status]}
+    </span>
+  );
+}
+
+function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirMoto }) {
+  const link = config?.linkRastreioGeral || LINK_RASTREIO_PADRAO;
+  const mapaRef = useRef(null);
+  const [devices, setDevices] = useState([]);
+  const [busca, setBusca] = useState("");
+  const [filtro, setFiltro] = useState("todas");
+  const [selecionado, setSelecionado] = useState(null);
+  const [atualizadoEm, setAtualizadoEm] = useState(null);
+  const [relatorio, setRelatorio] = useState(false);
+  const [, tique] = useState(0);
+  const [satelite, setSatelite] = useState(false);
+  const [rastro, setRastro] = useState(false);
+
+  // faz o "atualizado há X" andar sozinho
+  useEffect(() => {
+    const id = setInterval(() => tique((n) => n + 1), 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  const receberDevices = useCallback((lista) => {
+    setDevices(lista || []);
+    setAtualizadoEm(Date.now());
+  }, []);
+
+  // cada rastreador vira uma linha já ligada à moto e ao cliente
+  const linhas = useMemo(() => {
+    const peso = { movimento: 0, parada: 1, offline: 2 };
+    return (devices || [])
+      .map((d) => {
+        const placa = placaDoDevice(d);
+        const moto = (motos || []).find((m) => (m.placa || "").toUpperCase() === placa.toUpperCase());
+        const cliente = moto?.contratoAtual ? (clientes || []).find((c) => c.id === moto.contratoAtual.clienteId) : null;
+        const status = statusDoDevice(d);
+        return {
+          chave: String(d.id),
+          device: d,
+          placa,
+          moto,
+          cliente,
+          status,
+          velocidade: Math.round(Number(d.speed) || 0),
+          quando: haQuantoTempo(dataDoDevice(d)),
+          local: localDoDevice(d),
+        };
+      })
+      .sort((a, b) => (peso[a.status] - peso[b.status]) || a.placa.localeCompare(b.placa));
+  }, [devices, motos, clientes]);
+
+  const contagem = {
+    todas: linhas.length,
+    movimento: linhas.filter((l) => l.status === "movimento").length,
+    parada: linhas.filter((l) => l.status === "parada").length,
+    offline: linhas.filter((l) => l.status === "offline").length,
+  };
+
+  const q = semAcento(busca.trim());
+  const filtradas = linhas.filter(
+    (l) =>
+      (filtro === "todas" || l.status === filtro) &&
+      (!q || semAcento(`${l.placa} ${l.cliente?.nome || ""} ${l.local} ${l.moto?.modelo || ""}`).includes(q))
+  );
+  const escolhida = linhas.find((l) => l.chave === selecionado) || null;
+
+  const escolher = (chave) => {
+    setSelecionado(chave);
+    mapaRef.current?.focar(chave);
+  };
+
+  const exportarRelatorio = () => {
+    const cab = [["Placa", "Cliente", "Situação", "Velocidade (km/h)", "Último sinal", "Onde está"]];
+    linhas.forEach((l) => cab.push([formatPlaca(l.placa), l.cliente?.nome || "", RASTREIO_STATUS_ROTULO[l.status], String(l.velocidade), l.quando, l.local]));
+    const csv = cab.map((linha) => linha.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rastreio-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const filtros = [
+    { id: "todas", label: "Todas", n: contagem.todas },
+    { id: "movimento", label: "Movimento", n: contagem.movimento },
+    { id: "parada", label: "Paradas", n: contagem.parada },
+    { id: "offline", label: "Sem sinal", n: contagem.offline },
+  ];
+
+  return (
+    <div className="mbr-rastreio">
+      {/* BARRA DE CIMA — o resumo da frota e as ações da tela */}
+      <div className="mbr-rastreio-topo">
+        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>Rastreio</h1>
+        <div className="flex items-center flex-wrap" style={{ gap: 16, fontSize: 12.5 }}>
+          {[
+            { k: "movimento", texto: `${contagem.movimento} em movimento` },
+            { k: "parada", texto: `${contagem.parada} parada${contagem.parada === 1 ? "" : "s"}` },
+            { k: "offline", texto: `${contagem.offline} sem sinal` },
+          ].map(({ k, texto }) => (
+            <span key={k} className="flex items-center" style={{ gap: 7, color: RASTREIO_STATUS_TOM[k].cor, fontWeight: 600 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[k].cor }} />
+              {texto}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center" style={{ gap: 10, marginLeft: "auto" }}>
+          <span
+            className="flex items-center"
+            style={{ gap: 7, fontSize: 12, color: "var(--rd-text-dim)", background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 14px" }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: 999, background: atualizadoEm ? "var(--rd-positive)" : "var(--rd-text-faint)" }} />
+            {atualizadoEm ? `atualizado ${haQuantoTempo(new Date(atualizadoEm))}` : "carregando..."}
+          </span>
+          <button
+            onClick={() => mapaRef.current?.atualizar()}
+            aria-label="Atualizar agora"
+            title="Atualizar agora"
+            className="flex items-center justify-center mbr-hover-grow"
+            style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+          >
+            <RefreshCw size={15} strokeWidth={2.5} />
+          </button>
+          <button
+            onClick={() => setRelatorio(true)}
+            className="flex items-center"
+            style={{ gap: 8, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "9px 17px", fontSize: 13, fontWeight: 700 }}
+          >
+            <Route size={15} strokeWidth={2.75} /> Relatório do dia
+          </button>
+        </div>
+      </div>
+
+      <div className="mbr-rastreio-corpo">
+        {/* LISTA */}
+        <div className="mbr-rastreio-lista">
+          <div style={{ padding: "14px 16px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="relative">
+              <Search size={14} strokeWidth={2.75} style={{ position: "absolute", left: 13, top: 11, color: "var(--rd-text-faint)" }} />
+              <input
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                placeholder="Placa, cliente ou cidade"
+                style={{
+                  width: "100%",
+                  background: "var(--rd-surface-2)",
+                  border: "1px solid var(--rd-border)",
+                  borderRadius: 12,
+                  padding: "9px 12px 9px 34px",
+                  color: "var(--rd-text)",
+                  fontSize: 13,
+                  fontFamily: "var(--rd-font)" }}
+              />
+            </div>
+            <div className="mbr-filtros" style={{ minWidth: 0 }}>
+              {filtros.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setFiltro(f.id)}
+                  style={{
+                    padding: "5px 12px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: filtro === f.id ? 700 : 600,
+                    whiteSpace: "nowrap",
+                    background: filtro === f.id ? "var(--rd-brand)" : "transparent",
+                    color: filtro === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+                >
+                  {f.label} {f.n > 0 ? f.n : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            {filtradas.length === 0 ? (
+              <div style={{ padding: "18px 16px", fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                {devices.length === 0 ? "Carregando os rastreadores..." : "Nenhuma moto com esse filtro."}
+              </div>
+            ) : (
+              filtradas.map((l) => {
+                const ativa = l.chave === selecionado;
+                return (
+                  <button
+                    key={l.chave}
+                    onClick={() => escolher(l.chave)}
+                    className="w-full text-left"
+                    style={{
+                      display: "block",
+                      padding: "12px 16px",
+                      borderTop: "1px solid var(--rd-row-border)",
+                      borderLeft: `2px solid ${ativa ? "var(--rd-brand-light)" : "transparent"}`,
+                      background: ativa ? "var(--rd-surface)" : "transparent" }}
+                  >
+                    <div className="flex items-center" style={{ gap: 9 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[l.status].cor, flex: "none" }} />
+                      <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>
+                        {formatPlaca(l.placa)}
+                      </span>
+                      <ChipStatus status={l.status} pequeno />
+                      <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: l.status === "movimento" ? "var(--rd-text)" : "var(--rd-text-dim)", whiteSpace: "nowrap" }}>
+                        {l.velocidade} km/h
+                      </span>
+                    </div>
+                    <div className="flex items-baseline" style={{ gap: 10, marginTop: 4 }}>
+                      <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)", minWidth: 0 }}>
+                        {l.cliente?.nome || (l.moto ? "sem contrato" : "moto não cadastrada")}
+                      </span>
+                      <span style={{ marginLeft: "auto", fontSize: 11.5, color: "var(--rd-text-faint)", whiteSpace: "nowrap" }}>{l.quando}</span>
+                    </div>
+                    {l.local && (
+                      <div className="flex items-center" style={{ gap: 5, marginTop: 3 }}>
+                        <MapPin size={11} color="var(--rd-text-faint)" style={{ flex: "none" }} />
+                        <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)", minWidth: 0 }}>{l.local}</span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* MAPA */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            position: "relative",
+            // no celular o cabeçalho e a barra de navegação flutuam por cima do mapa:
+            // os controles e o cartão se afastam deles por essas medidas
+            "--mbr-top-rastreio": `${topInset}px`,
+            "--mbr-bottom-rastreio": `${bottomInset}px` }}
+        >
+          <TrackingMap
+            ref={mapaRef}
+            link={link}
+            height="100%"
+            rounded={false}
+            motos={motos}
+            clientes={clientes}
+            topInset={topInset}
+            bottomInset={bottomInset}
+            semControles
+            onDevices={receberDevices}
+            onSelecionar={(chave) => setSelecionado(chave)}
+            selecionadoId={selecionado}
+          />
+
+          <div className="mbr-rastreio-ferramentas flex items-center flex-wrap" style={{ gap: 8 }}>
+            {[
+              { label: "Centralizar frota", icone: Crosshair, acao: () => mapaRef.current?.centralizar(), ativo: false },
+              { label: "Satélite", icone: Landmark, acao: () => { mapaRef.current?.alternarSatelite(); setSatelite((v) => !v); }, ativo: satelite },
+              { label: "Mostrar rastro", icone: Route, acao: () => { mapaRef.current?.alternarRastro(); setRastro((v) => !v); }, ativo: rastro },
+            ].map((b) => (
+              <button
+                key={b.label}
+                onClick={b.acao}
+                className="flex items-center mbr-hover-grow"
+                style={{
+                  gap: 8,
+                  borderRadius: 999,
+                  padding: "8px 15px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  background: b.ativo ? "var(--rd-brand)" : hexToRgba("#0E1512", 0.86),
+                  border: `1px solid ${b.ativo ? "var(--rd-brand)" : "var(--rd-border)"}`,
+                  color: b.ativo ? "var(--rd-brand-light)" : "var(--rd-text)",
+                  backdropFilter: "blur(6px)" }}
+              >
+                <b.icone size={14} strokeWidth={2.5} /> {b.label}
+              </button>
+            ))}
+          </div>
+
+          {/* CARTÃO DA MOTO ESCOLHIDA */}
+          {escolhida && (
+            <div className="mbr-rastreio-cartao mbr-fade-in">
+              <div className="flex items-center" style={{ gap: 9, marginBottom: 10 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[escolhida.status].cor, flex: "none" }} />
+                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 15, fontWeight: 700, color: "var(--rd-text)" }}>
+                  {formatPlaca(escolhida.placa)}
+                </span>
+                <ChipStatus status={escolhida.status} />
+                <button
+                  onClick={() => setSelecionado(null)}
+                  aria-label="Fechar"
+                  className="flex items-center justify-center"
+                  style={{ marginLeft: "auto", width: 28, height: 28, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--rd-text)", marginBottom: 10 }}>
+                {escolhida.cliente?.nome || (escolhida.moto ? "Sem contrato" : "Moto não cadastrada")}
+              </div>
+
+              {escolhida.local && (
+                <div
+                  className="flex items-start"
+                  style={{ gap: 9, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}
+                >
+                  <MapPin size={14} color="var(--rd-text-muted)" style={{ flex: "none", marginTop: 1 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, color: "var(--rd-text)" }}>{escolhida.local}</div>
+                    {escolhida.moto?.modelo && <div style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>{escolhida.moto.modelo}</div>}
+                  </div>
+                </div>
+              )}
+
+              <div className="mbr-rastreio-stats" style={{ marginBottom: 10 }}>
+                {[
+                  { rotulo: "Velocidade", valor: `${escolhida.velocidade} km/h` },
+                  { rotulo: "Último sinal", valor: escolhida.quando || "—" },
+                  { rotulo: "Rodou hoje", valor: kmDoDevice(escolhida.device) },
+                ].map((n) => (
+                  <div key={n.rotulo}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 3 }}>
+                      {n.rotulo}
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)", whiteSpace: "nowrap" }}>{n.valor}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center" style={{ gap: 8 }}>
+                <button
+                  onClick={() => { mapaRef.current?.alternarRastro(); setRastro((v) => !v); }}
+                  className="flex items-center justify-center"
+                  style={{ flex: 1, gap: 7, borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 700, background: rastro ? "var(--rd-brand)" : "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: rastro ? "var(--rd-brand-light)" : "var(--rd-text)" }}
+                >
+                  <Route size={13} /> Trajeto
+                </button>
+                {escolhida.moto && (
+                  <button
+                    onClick={() => onAbrirMoto?.(escolhida.moto.id)}
+                    className="flex items-center justify-center"
+                    style={{ flex: 1, gap: 7, borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 700, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text)" }}
+                  >
+                    <FileText size={13} /> Ficha
+                  </button>
+                )}
+                {escolhida.cliente?.telefone && (
+                  <a
+                    href={`tel:${(escolhida.cliente.telefone || "").replace(/\D/g, "")}`}
+                    aria-label={`Ligar para ${escolhida.cliente.nome}`}
+                    title={`Ligar para ${escolhida.cliente.nome}`}
+                    className="flex items-center justify-center flex-none"
+                    style={{ width: 40, height: 40, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text)" }}
+                  >
+                    <Phone size={14} />
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* LEGENDA */}
+          <div className="mbr-rastreio-legenda flex items-center" style={{ gap: 16 }}>
+            {["movimento", "parada", "offline"].map((k) => (
+              <span key={k} className="flex items-center" style={{ gap: 7, fontSize: 11.5, color: "var(--rd-text-muted)" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[k].cor }} />
+                {RASTREIO_STATUS_ROTULO[k]}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {relatorio && (
+        <Modal title={`Relatório do dia · ${formatDate(todayISO())}`} onClose={() => setRelatorio(false)}>
+          <div className="flex items-center flex-wrap" style={{ gap: 14, marginBottom: "var(--rd-s4)", fontSize: 12.5 }}>
+            {["movimento", "parada", "offline"].map((k) => (
+              <span key={k} className="flex items-center" style={{ gap: 7, color: RASTREIO_STATUS_TOM[k].cor, fontWeight: 600 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[k].cor }} />
+                {contagem[k === "movimento" ? "movimento" : k]} {RASTREIO_STATUS_ROTULO[k].toLowerCase()}
+              </span>
+            ))}
+          </div>
+          <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+            {linhas.map((l) => (
+              <div key={l.chave} className="flex items-center" style={{ gap: 10, padding: "9px 0", borderTop: "1px solid var(--rd-row-border)" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[l.status].cor, flex: "none" }} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 12.5, fontWeight: 600, color: "var(--rd-text)" }}>{formatPlaca(l.placa)}</div>
+                  <div className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                    {l.cliente?.nome ? `${l.cliente.nome} · ` : ""}
+                    {l.local}
+                  </div>
+                </div>
+                <span style={{ fontSize: 12, color: "var(--rd-text-muted)", whiteSpace: "nowrap" }}>{l.velocidade} km/h</span>
+                <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)", whiteSpace: "nowrap" }}>{l.quando}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={exportarRelatorio}
+            className="flex items-center justify-center w-full"
+            style={{ gap: 8, marginTop: "var(--rd-s4)", borderRadius: 12, padding: "11px 14px", fontSize: 13, fontWeight: 700, background: "var(--rd-brand-soft)", color: "var(--rd-shell)" }}
+          >
+            <Download size={14} strokeWidth={2.5} /> Baixar em CSV
+          </button>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -8355,6 +8899,8 @@ function AppAutenticado({ perfil, onSignOut }) {
   // A regra é por tela: a Visão geral abre com o menu aberto (é o ponto de partida,
   // dá pra ver pra onde ir); entrar em qualquer outra aba joga a tela pro modo cheio.
   // Dentro da aba o botão continua valendo — a regra só volta a valer na próxima troca.
+  // "Abrir a ficha" no mapa: guarda qual moto abrir e troca pra aba Frota
+  const [motoParaAbrir, setMotoParaAbrir] = useState(null);
   const [menuRecolhido, setMenuRecolhido] = useState(false);
   useEffect(() => {
     setMenuRecolhido(tab !== "dashboard");
@@ -8363,7 +8909,7 @@ function AppAutenticado({ perfil, onSignOut }) {
 
   // Frota, Clientes e Caixa já desenham o próprio título (com a contagem e os botões
   // na mesma linha) — o header do shell em cima só repetia a palavra e comia 60px
-  const telaTemTituloProprio = ["motos", "clientes", "fluxo"].includes(tab);
+  const telaTemTituloProprio = ["motos", "clientes", "fluxo", "rastreio"].includes(tab);
 
   const abaAtual = tabs.find((t) => t.id === tab);
   const tituloTela = abaAtual ? abaAtual.label : "Ajustes";
@@ -8534,6 +9080,81 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
         }
         .mbr-cresce { flex: 1 1 auto; display: flex; flex-direction: column; }
+
+        /* RASTREIO — barra de cima, lista à esquerda e mapa ocupando o resto. No
+           celular a lista e a barra somem: lá o mapa é a tela inteira, com o cabeçalho
+           flutuante do app por cima (como já era) */
+        .mbr-rastreio { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+        .mbr-rastreio-topo { display: none; }
+        .mbr-rastreio-corpo { flex: 1; min-height: 0; display: flex; }
+        .mbr-rastreio-lista { display: none; }
+        .mbr-rastreio-ferramentas { position: absolute; left: 14px; top: calc(14px + var(--mbr-top-rastreio, 0px)); z-index: 10; max-width: calc(100% - 28px); }
+        .mbr-rastreio-legenda {
+          position: absolute;
+          right: 14px;
+          bottom: calc(14px + var(--mbr-bottom-rastreio, 0px));
+          z-index: 10;
+          background: rgba(14, 21, 18, 0.86);
+          border: 1px solid var(--rd-border);
+          border-radius: 999px;
+          padding: 8px 14px;
+          backdrop-filter: blur(6px);
+        }
+        .mbr-rastreio-stats {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          border: 1px solid var(--rd-border);
+          border-radius: 12px;
+          overflow: hidden;
+        }
+        .mbr-rastreio-stats > div { padding: 9px 10px; min-width: 0; }
+        .mbr-rastreio-stats > div + div { border-left: 1px solid var(--rd-border); }
+        /* na barra estreita as pílulas quebram em duas linhas em vez de sumir pro lado */
+        .mbr-rastreio-lista .mbr-filtros { flex-wrap: wrap; overflow-x: visible; }
+        .mbr-rastreio-lista .mbr-filtros > button { padding: 5px 10px !important; font-size: 11.5px !important; }
+        .mbr-rastreio-cartao {
+          position: absolute;
+          right: 14px;
+          /* no celular o cartão desce um pouco pra não tampar os botões do mapa */
+          top: calc(62px + var(--mbr-top-rastreio, 0px));
+          z-index: 12;
+          width: 348px;
+          max-width: calc(100% - 28px);
+          background: rgba(14, 21, 18, 0.93);
+          border: 1px solid var(--rd-border);
+          border-radius: 18px;
+          padding: 16px;
+          backdrop-filter: blur(10px);
+          box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+        }
+        @media (min-width: 1024px) {
+          .mbr-rastreio-topo {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 18px;
+            padding: 14px 22px;
+            border-bottom: 1px solid var(--rd-border-soft);
+            background: var(--rd-shell);
+            border-radius: 17px 17px 0 0;
+          }
+          .mbr-rastreio-lista {
+            display: flex;
+            flex-direction: column;
+            width: 358px;
+            flex: none;
+            min-height: 0;
+            border-right: 1px solid var(--rd-border-soft);
+            background: var(--rd-shell);
+          }
+          .mbr-rastreio-cartao { top: 14px; }
+          .mbr-rastreio-ferramentas { top: 14px; }
+        }
+        /* o zoom e o "i" da atribuição sobem pra não cair em cima da legenda */
+        .mbr-rastreio .maplibregl-ctrl-bottom-right { bottom: calc(46px + var(--mbr-bottom-rastreio, 0px)); }
+
+        /* o pino da moto escolhida ganha um anel claro */
+        .mbr-map-marker--ativo > div > div:first-child { box-shadow: 0 0 0 4px rgba(214, 232, 208, 0.55), 0 1px 3px rgba(0, 0, 0, 0.5) !important; }
 
         /* as duas colunas de Futuros: uma embaixo da outra no celular */
         .mbr-futuros-grid {
@@ -8937,6 +9558,8 @@ function AppAutenticado({ perfil, onSignOut }) {
                 config={configState.value}
                 lancamentos={fluxoState.items}
                 persistLancamentos={fluxoState.persist}
+                motoInicial={motoParaAbrir}
+                onAbriuMoto={() => setMotoParaAbrir(null)}
               />
             ) : tab === "clientes" ? (
               <ClientesView
@@ -8963,6 +9586,10 @@ function AppAutenticado({ perfil, onSignOut }) {
                 clientes={clientesState.items}
                 topInset={chromeHeights.header}
                 bottomInset={chromeHeights.nav}
+                onAbrirMoto={(id) => {
+                  setMotoParaAbrir(id);
+                  setTab("motos");
+                }}
               />
             ) : (
               <ConfiguracoesView config={configState.value} persist={configState.persist} perfil={perfil} onSignOut={onSignOut} />
