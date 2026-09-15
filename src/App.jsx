@@ -54,6 +54,7 @@ import {
   Landmark,
   Timer,
   MoreHorizontal,
+  Download,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -521,6 +522,118 @@ function pendenciasDoMes(futuros, motos, lancamentos, mesKey) {
     aPagar: porData(aPagar),
     totalReceber: aReceber.reduce((t, i) => t + i.valor, 0),
     totalPagar: aPagar.reduce((t, i) => t + i.valor, 0),
+  };
+}
+
+// TUDO QUE TEM DATA NUM MÊS — o que ainda vai entrar/sair e o que já entrou/saiu.
+// É a conta que a aba "Futuros" mostra: uma coluna de receber, uma de pagar, cada
+// linha já sabendo se está feita, atrasada ou vencendo essa semana. Os totais batem
+// com "pendenciasDoMes" (a conta que a Visão geral usa), porque a regra de quem
+// cobra no mês é a mesma: contratoCobraNoMes + pagamento lançado no Caixa.
+function contasDoMes(futuros, motos, clientes, lancamentos, mesKey) {
+  const hojeISO = todayISO();
+  const mesHoje = hojeISO.slice(0, 7);
+  const [ano, mesN] = mesKey.split("-").map(Number);
+  const ultimoDia = new Date(ano, mesN, 0).getDate();
+  const diasAte = (data) => Math.round((new Date(`${data}T00:00:00`) - new Date(`${hojeISO}T00:00:00`)) / 86400000);
+  const receber = [];
+  const pagar = [];
+  const proximoMes = [];
+
+  (futuros || []).forEach((f) => {
+    const recorrente = !!f.recorrente;
+    const dentroDoMes = recorrente
+      ? (() => {
+          const ini = (f.vencimento || hojeISO).slice(0, 7);
+          const fim = f.dataTermino ? f.dataTermino.slice(0, 7) : null;
+          return mesKey >= ini && (!fim || mesKey <= fim);
+        })()
+      : (f.vencimento || "").slice(0, 7) === mesKey;
+    if (!dentroDoMes) return;
+    const data = dataDoFuturoNoMes(f, mesKey);
+    const feito = recorrente ? (f.confirmados || []).includes(mesKey) : !!f.pago;
+    const moto = (motos || []).find((m) => m.id === f.motoId);
+    const partes = [];
+    if (moto) partes.push(formatPlaca(moto.placa));
+    if (f.parcelasTotal > 1) partes.push(`parcela ${f.parcelaAtual || 1} de ${f.parcelasTotal}`);
+    else if (recorrente) partes.push("fixo mensal");
+    const detalhe = detalheDoFuturo(f);
+    if (detalhe) partes.push(detalhe);
+    const item = {
+      id: `f:${f.id}:${mesKey}`,
+      data,
+      dia: Number(data.slice(8, 10)) || 1,
+      titulo: nomeDoFuturo(f),
+      sub: partes.join(" · "),
+      valor: Number(f.valor) || 0,
+      feito,
+      feitoEm: feito ? data : null,
+      diasAte: diasAte(data),
+      atrasado: !feito && mesKey <= mesHoje && diasAte(data) < 0,
+      origem: "futuro",
+      futuro: f,
+    };
+    (f.tipo === "entrada" ? receber : pagar).push(item);
+  });
+
+  (motos || []).forEach((m) => {
+    const c = m.contratoAtual;
+    if (!c || !(Number(c.valorMensal) > 0)) return;
+    const cliente = (clientes || []).find((x) => x.id === c.clienteId);
+    const dia = Math.min(diaVencimentoDoContrato(c) || 1, ultimoDia);
+    const data = `${mesKey}-${String(dia).padStart(2, "0")}`;
+    const base = {
+      titulo: cliente?.nome || `Mensalidade ${formatPlaca(m.placa)}`,
+      valor: Number(c.valorMensal) || 0,
+      origem: "contrato",
+      moto: m,
+    };
+    if (!contratoCobraNoMes(c, mesKey)) {
+      // contrato fechado agora: a 1ª cobrança é no mês seguinte (aluguel se paga no
+      // fim do período) — vira o bloco "a partir do mês que vem"
+      const primeira = primeiraCobrancaDoContrato(c);
+      if (primeira && primeira.slice(0, 7) > mesKey) {
+        proximoMes.push({
+          ...base,
+          id: `c1:${m.id}`,
+          data: primeira,
+          dia: Number(primeira.slice(8, 10)) || 1,
+          sub: `${formatPlaca(m.placa)} · 1ª cobrança`,
+          mesPrimeira: primeira.slice(0, 7),
+        });
+      }
+      return;
+    }
+    const pagamentos = pagamentosDaMoto(m, lancamentos);
+    const feito = pagouNoMes(pagamentos, mesKey);
+    const pagamentoDoMes = pagamentos.find((p) => (p.data || "").slice(0, 7) === mesKey);
+    receber.push({
+      ...base,
+      id: `c:${m.id}:${mesKey}`,
+      data,
+      dia,
+      sub: `${formatPlaca(m.placa)} · mensalidade`,
+      feito,
+      feitoEm: pagamentoDoMes?.data || null,
+      diasAte: diasAte(data),
+      atrasado: !feito && mesKey <= mesHoje && diasAte(data) < 0,
+    });
+  });
+
+  // pendente primeiro (na ordem do calendário), feito por último
+  const ordenar = (lista) => [...lista].sort((a, b) => (a.feito !== b.feito ? (a.feito ? 1 : -1) : (a.data < b.data ? -1 : 1)));
+  const soma = (lista) => lista.reduce((t, i) => t + i.valor, 0);
+  const pendentes = (lista) => lista.filter((i) => !i.feito);
+  return {
+    receber: ordenar(receber),
+    pagar: ordenar(pagar),
+    proximoMes: [...proximoMes].sort((a, b) => (a.data < b.data ? -1 : 1)),
+    aReceber: soma(pendentes(receber)),
+    aPagar: soma(pendentes(pagar)),
+    qtdReceber: pendentes(receber).length,
+    qtdPagar: pendentes(pagar).length,
+    vencemNaSemana: [...pendentes(receber), ...pendentes(pagar)].filter((i) => i.diasAte >= 0 && i.diasAte <= 7).length,
+    ultimoDia,
   };
 }
 
@@ -4815,14 +4928,90 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 }
 
-const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey, lancamentos, onExcluido }, ref) {
+// uma linha de conta (a receber ou a pagar) do mês — data em etiqueta, nome, detalhe,
+// valor e o botão que resolve ("Recebi" / "Paguei"). Já resolvida, a linha fica apagada
+// e o botão vira um selo sem ação.
+function LinhaConta2({ item, entrada, rotuloAcao, rotuloFeito, onAcao, onAbrir }) {
+  const cor = entrada ? "var(--rd-positive)" : "var(--rd-negative)";
+  const mesCurto = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][
+    Number((item.data || "").slice(5, 7)) - 1
+  ];
+  const selo = item.atrasado
+    ? { texto: "atrasado", cor: "var(--rd-negative)", fundo: "rgba(226,106,90,0.14)" }
+    : !item.feito && item.diasAte >= 0 && item.diasAte <= 7
+    ? { texto: item.diasAte === 0 ? "hoje" : `${item.diasAte} dia${item.diasAte === 1 ? "" : "s"}`, cor: "var(--rd-attention-text)", fundo: "var(--rd-attention-bg-2)" }
+    : null;
+  return (
+    <div
+      className="flex items-center flex-wrap"
+      style={{ gap: 12, padding: "11px 0", borderTop: "1px solid var(--rd-row-border)", opacity: item.feito ? 0.5 : 1 }}
+    >
+      <div
+        className="flex flex-col items-center justify-center flex-none"
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 11,
+          background: "var(--rd-surface-2)",
+          border: `1px solid ${item.atrasado ? "var(--rd-negative)" : "var(--rd-border)"}` }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1, color: item.atrasado ? "var(--rd-negative)" : "var(--rd-text)" }}>
+          {String(item.dia).padStart(2, "0")}
+        </span>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-faint)" }}>{mesCurto}</span>
+      </div>
+      <div
+        className="flex flex-col"
+        style={{ gap: 2, minWidth: 0, flex: "1 1 140px", cursor: onAbrir ? "pointer" : "default" }}
+        onClick={onAbrir || undefined}
+      >
+        <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
+          <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{item.titulo}</span>
+          {selo && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 8px", background: selo.fundo, color: selo.cor, whiteSpace: "nowrap" }}>
+              {selo.texto}
+            </span>
+          )}
+        </div>
+        <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+          {/* resolvida, a linha troca o detalhe pela data — "placa · mensalidade ·
+              recebido em 01/09" não cabia e cortava justo na informação nova */}
+          {item.feito && item.feitoEm
+            ? `${(item.sub || "").split(" · ")[0]} · ${entrada ? "recebido" : "pago"} em ${formatDate(item.feitoEm).slice(0, 5)}`
+            : item.sub}
+        </span>
+      </div>
+      <span className="flex items-center" style={{ gap: 10, marginLeft: "auto" }}>
+      <span style={{ fontSize: 13.5, fontWeight: 700, color: item.feito ? "var(--rd-text-dim)" : cor, whiteSpace: "nowrap" }}>
+        {formatCurrency(item.valor)}
+      </span>
+      {permissoes.podeEditar && (rotuloAcao || rotuloFeito) &&
+        (item.feito ? (
+          <span
+            className="flex-none text-center"
+            style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "6px 12px", border: "1px solid var(--rd-border)", color: "var(--rd-text-faint)" }}
+          >
+            {rotuloFeito}
+          </span>
+        ) : (
+          <button
+            onClick={onAcao}
+            className="flex-none mbr-hover-grow"
+            style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "6px 13px", border: "1px solid var(--rd-border)", background: "var(--rd-surface-2)", color: "var(--rd-text)" }}
+          >
+            {rotuloAcao}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+const FuturosView = forwardRef(function FuturosView(
+  { futuros, persist, motos, clientes, onConfirmar, mesVisivel, mesAtualKey, lancamentos, onExcluido, onReceberContrato },
+  ref
+) {
   const [modal, setModal] = useState(null);
-  const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
-  const [verTodosFixos, setVerTodosFixos] = useState(false);
-  const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
-  const [grupoAberto, setGrupoAberto] = useState(null);
-  // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
-  // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
   useImperativeHandle(ref, () => ({ abrirNovo: () => setModal(emptyFuturo()) }));
 
   const salvar = async (fOrLista) => {
@@ -4847,433 +5036,127 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     onExcluido?.(alvo, rotulo);
   };
 
-  const { fixoMensalSaida, fixoMensalEntrada, avulsosPendentesSaida, avulsosPendentesEntrada, previstoSaida12Meses, previstoEntrada12Meses, saldoPrevisto12Meses } =
-    totaisFuturos(futuros, motos);
-  const contratos = contratosComoFuturos(motos);
+  const mes = mesVisivel || mesAtualKey;
+  const contas = contasDoMes(futuros, motos, clientes, lancamentos, mes);
+  const sobra = contas.aReceber - contas.aPagar;
+  const totalBarra = Math.max(1, contas.aReceber + contas.aPagar);
+  const fimDoMes = `${String(contas.ultimoDia).padStart(2, "0")}/${mes.slice(5, 7)}`;
 
-  const recorrentes = futuros.filter((f) => f.recorrente);
-  // avulso confirmado (pago) já virou um lançamento real em "Lançado" — some daqui, não
-  // faz sentido continuar mostrando como pendência
-  const avulsos = [...futuros.filter((f) => !f.recorrente && !f.pago)].sort((a, b) => (a.vencimento > b.vencimento ? 1 : -1));
-
-  // agenda de cobrança: agrupa por dia do mês quem tem que ser cobrado — pensado pra
-  // quando tiver muitas motos/clientes e ficar difícil lembrar "quem vence quando" só
-  // olhando a lista corrida de contratos/recorrentes
-  // A agenda responde "quem eu cobro ESTE mês?". Um contrato fechado neste mês ainda não
-  // entra: o aluguel é pago no fim do período, então a 1ª cobrança dele é no mês que vem.
-  // Por isso a lista é separada em dois blocos — antes tudo aparecia junto e só dava pra
-  // saber de quem cobrar indo olhar a data de início contrato por contrato.
-  const cobrancas = (() => {
-    const hojeISO = todayISO();
-    const mesHoje = hojeISO.slice(0, 7);
-    const diaHoje = Number(hojeISO.slice(8, 10));
-    // TODA cobrança do mês entra aqui: contrato, conta de entrada que se repete e conta
-    // de entrada avulsa com vencimento no mês. Antes a avulsa ficava de fora, então o
-    // "falta entrar" daqui não batia com o "A receber" da Visão geral.
-    const entradasAvulsas = futuros.filter(
-      (f) => f.tipo === "entrada" && !f.recorrente && (f.vencimento || "").slice(0, 7) === mesAtualKey
-    );
-    const recorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada"), ...entradasAvulsas];
-    const agora = [];
-    const depois = [];
-    recorrentes.forEach((f) => {
-      const dia = f.diaVencimento || (f.vencimento ? Number(f.vencimento.slice(8, 10)) : null);
-      if (!dia) return;
-      const moto = motos?.find((m) => m.id === f.motoId);
-      const cliente = moto?.contratoAtual ? clientes?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
-      const mesDaPrimeira = (f.vencimento || "").slice(0, 7);
-      // MESMA regra do resto do site: contrato usa contratoCobraNoMes (que respeita a 1ª
-      // cobrança E a data de término); conta que se repete respeita início e término dela
-      const jaComecou = f.origemContrato
-        ? contratoCobraNoMes(moto?.contratoAtual, mesAtualKey)
-        : !mesDaPrimeira ||
-          (mesDaPrimeira <= mesAtualKey && (!f.dataTermino || mesAtualKey <= f.dataTermino.slice(0, 7)));
-      // estado de cada cobrança, lido de onde o dinheiro realmente entra: pra contrato é
-      // o pagamento lançado no Caixa pra essa moto (mesmo caminho da aba Motos, então as
-      // duas telas nunca se contradizem); pra conta comum é o "confirmados"/"pago" dela.
-      const recebido = jaComecou
-        ? f.origemContrato && moto
-          ? pagouNoMes(pagamentosDaMoto(moto, lancamentos), mesAtualKey)
-          : f.recorrente
-          ? (f.confirmados || []).includes(mesAtualKey)
-          : !!f.pago
-        : false;
-      const atrasado = jaComecou && !recebido && mesAtualKey === mesHoje && dia < diaHoje;
-      const item = {
-        id: f.id,
-        dia,
-        label: cliente?.nome || nomeDoFuturo(f),
-        sub: moto ? formatPlaca(moto.placa) : null,
-        valor: Number(f.valor) || 0,
-        desde: f.dataInicioContrato || "",
-        mesDaPrimeira,
-        recebido,
-        atrasado,
-      };
-      (jaComecou ? agora : depois).push(item);
-    });
-    const porDia = (lista) => lista.sort((a, b) => a.dia - b.dia);
-    // o que está atrasado sobe, o que já entrou desce — é essa a ordem em que a pessoa
-    // precisa olhar a lista, não a ordem do calendário
-    const peso = (it) => (it.atrasado ? 0 : it.recebido ? 2 : 1);
-    return {
-      agora: porDia(agora).sort((a, b) => peso(a) - peso(b)),
-      depois: porDia(depois),
-      aReceber: agora.filter((it) => !it.recebido).reduce((t, it) => t + it.valor, 0),
-      recebido: agora.filter((it) => it.recebido).reduce((t, it) => t + it.valor, 0),
-      atrasadas: agora.filter((it) => it.atrasado).length,
-    };
-  })();
-
-  // Junta numa linha só o que é "a mesma conta repetida", pra lista não virar um
-  // paredão: as parcelas de um mesmo carnê (um financiamento em 48x virava 48 linhas)
-  // e a mesma conta aplicada a várias motos (rastreador, seguro — vira uma conta por
-  // moto no banco). Clicar na linha abre e mostra o que tem dentro.
-  //
-  // Contas já cadastradas não têm o campo de grupo, então o agrupamento por moto usa o
-  // CONTEÚDO (nome + tipo + valor + dia) como chave — assim o que já está no banco
-  // aparece agrupado sem precisar recadastrar nada.
-  const agrupar = (lista) => {
-    const grupos = new Map();
-    lista.forEach((f) => {
-      const dia = f.diaVencimento || (f.vencimento ? f.vencimento.slice(8, 10) : "");
-      const chave = f.grupoParcelas
-        ? `parc:${f.grupoParcelas}`
-        : f.motoId
-        ? `moto:${nomeDoFuturo(f)}|${f.tipo}|${Number(f.valor) || 0}|${f.recorrente ? 1 : 0}|${dia}`
-        : `uni:${f.id}`;
-      if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
-      grupos.get(chave).itens.push(f);
-    });
-    return [...grupos.values()];
+  const resolver = (item) => {
+    if (item.origem === "contrato") onReceberContrato?.(item.moto, mes);
+    else onConfirmar?.(item.futuro, mes);
   };
 
-  const gruposFixos = agrupar(recorrentes);
-  const gruposAvulsos = agrupar(avulsos);
-
-  const GrupoRow = ({ grupo }) => {
-    const itens = grupo.itens;
-    const primeiro = itens[0];
-    const aberto = grupoAberto === grupo.chave;
-    const ehParcelado = grupo.chave.startsWith("parc:");
-    const total = itens.reduce((s, f) => s + (Number(f.valor) || 0), 0);
-    const pendentes = itens.filter((f) => !f.pago);
-    const proxima = [...pendentes].sort((a, b) => (a.vencimento > b.vencimento ? 1 : -1))[0];
-    const totalParcelas = primeiro.parcelasTotal || itens.length;
-
-    return (
-      <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
-        <div
-          onClick={() => setGrupoAberto(aberto ? null : grupo.chave)}
-          className="flex items-center justify-between cursor-pointer"
-          style={{ padding: "13px 18px" }}
-        >
-          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
-            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}>
-              {primeiro.tipo === "entrada" ? <TrendingUp size={15} color="var(--rd-positive)" /> : <TrendingDown size={15} color="var(--rd-negative)" />}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
-                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>{nomeDoFuturo(primeiro)}</span>
-                <span
-                  style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface-2)", color: "var(--rd-text-dim)", flex: "none" }}
-                >
-                  {ehParcelado ? `${totalParcelas} parcelas` : `${itens.length} motos`}
-                </span>
-              </div>
-              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
-                {ehParcelado
-                  ? `${formatCurrency(primeiro.valor)} por mês · faltam ${pendentes.length} de ${totalParcelas}${
-                      proxima ? ` · próxima em ${formatDate(proxima.vencimento)}` : ""
-                    }`
-                  : primeiro.recorrente
-                  ? `Todo mês · dia ${primeiro.diaVencimento || (primeiro.vencimento ? new Date(`${primeiro.vencimento}T00:00:00`).getDate() : "?")} · ${formatCurrency(primeiro.valor)} por moto`
-                  : `Vence em ${formatDate(primeiro.vencimento)} · ${formatCurrency(primeiro.valor)} por moto`}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center flex-shrink-0" style={{ gap: 6 }}>
-            <span style={{ color: primeiro.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)", fontWeight: 700, fontSize: 15 }}>
-              {primeiro.tipo === "entrada" ? "+ " : "\u2212 "}
-              {formatCurrency(total)}
-            </span>
-            {aberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />}
-          </div>
-        </div>
-        <Collapse open={aberto}>
-          <div className="flex flex-col px-3 pb-3" style={{ gap: 8 }}>
-            {itens.map((f) => (
-              <FuturoRow key={f.id} f={f} dentroDeGrupo />
-            ))}
-          </div>
-        </Collapse>
-      </div>
-    );
-  };
-
-  const FuturoRow = ({ f, dentroDeGrupo }) => {
-    const motoLigada = motos?.find((m) => m.id === f.motoId);
-    const diaDoMes = f.diaVencimento || (f.vencimento ? new Date(`${f.vencimento}T00:00:00`).getDate() : null);
-    // fixa mensal não tem "pago" (ela se repete pra sempre) — o que existe é confirmar ou
-    // não o mês atual específico; avulso pago já nem chega aqui (filtrado antes da lista)
-    const jaConfirmadoEsteMes = f.recorrente && (f.confirmados || []).includes(mesAtualKey);
-    return (
+  const Coluna = ({ entrada, titulo, total, itens, vazio, rodape }) => (
     <div
-      key={f.id}
-      onClick={() => permissoes.podeEditar && setModal(f)}
-      className={`flex items-center justify-between rounded-2xl${permissoes.podeEditar ? " cursor-pointer" : ""}`}
-      style={{
-        padding: "13px 18px",
-        background: dentroDeGrupo ? "var(--rd-surface-2)" : "var(--rd-surface)",
-        border: `1px solid ${dentroDeGrupo ? "transparent" : "var(--rd-border)"}`,
-        opacity: jaConfirmadoEsteMes ? 0.55 : 1 }}
+      className="mbr-cresce"
+      style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
     >
-      <div className="flex items-center min-w-0" style={{ gap: 12 }}>
-        <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}>
-          {f.tipo === "entrada" ? <TrendingUp size={15} color="var(--rd-positive)" /> : <TrendingDown size={15} color="var(--rd-negative)" />}
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
-            <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>{nomeDoFuturo(f)}</span>
-            {f.parcelasTotal > 1 && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  borderRadius: 999,
-                  padding: "1px 8px",
-                  background: "var(--rd-surface-2)",
-                  color: "var(--rd-text-dim)",
-                  flex: "none" }}
-              >
-                Parcela {f.parcelaAtual || 1}/{f.parcelasTotal}
-              </span>
-            )}
-          </div>
-          <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
-            {f.recorrente ? `Todo mês · dia ${diaDoMes}` : `Vence em ${formatDate(f.vencimento)}`}
-            {jaConfirmadoEsteMes && " · mês atual já lançado"}
-            {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
-            {detalheDoFuturo(f) && ` · ${detalheDoFuturo(f)}`}
-          </div>
-        </div>
-      </div>
-      <div className="flex items-center flex-shrink-0" style={{ gap: 6 }}>
-        <span style={{ color: f.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)", fontWeight: 700, fontSize: 15 }}>
-          {f.tipo === "entrada" ? "+ " : "− "}
-          {formatCurrency(f.valor)}
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s3)" }}>
+        <span className="flex items-center" style={{ gap: 8 }}>
+          <span style={{ width: 7, height: 7, borderRadius: 999, background: entrada ? "var(--rd-positive)" : "var(--rd-negative)" }} />
+          <span style={RD_LABEL}>{titulo}</span>
         </span>
-        {permissoes.podeEditar && !jaConfirmadoEsteMes && onConfirmar && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onConfirmar(f, f.recorrente ? mesAtualKey : undefined);
-            }}
-            title={f.tipo === "entrada" ? "Confirmar recebimento" : "Confirmar pagamento"}
-            className="mbr-hover-grow flex items-center justify-center"
-            style={{ color: "var(--rd-brand-light)", width: 30, height: 30 }}
-          >
-            <CheckCircle2 size={16} />
-          </button>
-        )}
-        {permissoes.podeEditar && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              excluir(f.id);
-            }}
-            className="mbr-hover-grow flex items-center justify-center"
-            style={{ color: "var(--rd-text-dim)", width: 30, height: 30, marginRight: -6 }}
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
+        <span style={{ fontSize: 14.5, fontWeight: 700, color: entrada ? "var(--rd-positive)" : "var(--rd-negative)" }}>{formatCurrency(total)}</span>
       </div>
+      {itens.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingTop: 4 }}>{vazio}</div>
+      ) : (
+        itens.map((item) => (
+          <LinhaConta2
+            key={item.id}
+            item={item}
+            entrada={entrada}
+            rotuloAcao={entrada ? "Recebi" : "Paguei"}
+            rotuloFeito={entrada ? "Recebido" : "Pago"}
+            onAcao={() => resolver(item)}
+            onAbrir={item.origem === "futuro" ? () => setModal(item.futuro) : null}
+          />
+        ))
+      )}
+      {rodape}
     </div>
-    );
-  };
+  );
 
   return (
-    <div>
-      {(cobrancas.agora.length > 0 || cobrancas.depois.length > 0) && (
-        <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
-          <div className="flex items-baseline flex-wrap mb-3" style={{ gap: 10 }}>
-            <span style={RD_LABEL}>Recebimentos do mês</span>
-            {cobrancas.aReceber > 0 && (
-              <span className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
-                falta entrar <span style={{ color: "var(--rd-text)", fontWeight: 700 }}>{formatCurrency(cobrancas.aReceber)}</span>
+    <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
+      {/* faixa de resumo do mês: o que ainda entra, o que ainda sai e o que sobra */}
+      <div
+        className="flex items-center flex-wrap"
+        style={{ gap: "var(--rd-s5)", background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
+      >
+        <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
+              Ainda entra
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-positive)" }}>{formatCurrency(contas.aReceber)}</div>
+          </div>
+          <span className="mbr-oper" style={{ fontSize: 16, color: "var(--rd-text-faint)" }}>−</span>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
+              Ainda sai
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-negative)" }}>{formatCurrency(contas.aPagar)}</div>
+          </div>
+          <span className="mbr-oper" style={{ fontSize: 16, color: "var(--rd-text-faint)" }}>=</span>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
+              Sobra até {fimDoMes}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: sobra >= 0 ? "var(--rd-text)" : "var(--rd-negative)" }}>
+              {formatCurrency(sobra)}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col" style={{ gap: 8, marginLeft: "auto", minWidth: 220, flex: "1 1 220px", maxWidth: 420 }}>
+          <div className="flex" style={{ height: 6, borderRadius: 999, overflow: "hidden", background: "var(--rd-surface-2)" }}>
+            <span style={{ width: `${(contas.aReceber / totalBarra) * 100}%`, background: "var(--rd-positive)" }} />
+            <span style={{ width: `${(contas.aPagar / totalBarra) * 100}%`, background: "var(--rd-negative)" }} />
+          </div>
+          <div className="flex items-center flex-wrap" style={{ gap: 14, fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+            <span className="flex items-center" style={{ gap: 6 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--rd-positive)" }} />
+              {contas.qtdReceber} recebimento{contas.qtdReceber === 1 ? "" : "s"}
+            </span>
+            <span className="flex items-center" style={{ gap: 6 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--rd-negative)" }} />
+              {contas.qtdPagar} conta{contas.qtdPagar === 1 ? "" : "s"}
+            </span>
+            {contas.vencemNaSemana > 0 && (
+              <span style={{ color: "var(--rd-attention-text)", fontWeight: 700 }}>
+                {contas.vencemNaSemana} vence{contas.vencemNaSemana === 1 ? "" : "m"} essa semana
               </span>
             )}
-            {cobrancas.atrasadas > 0 && (
-              <span className="text-xs" style={{ color: "var(--rd-negative)", fontWeight: 700 }}>
-                {cobrancas.atrasadas} atrasad{cobrancas.atrasadas === 1 ? "a" : "as"}
-              </span>
-            )}
-          </div>
-
-          {cobrancas.agora.length === 0 ? (
-            <div className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
-              Nenhuma cobrança neste mês.
-            </div>
-          ) : (
-            <div className="flex flex-col">
-              {(verTodasCobrancas ? cobrancas.agora : cobrancas.agora.slice(0, 5)).map((it, i) => (
-                <div
-                  key={it.id}
-                  className="flex items-center gap-3 py-2.5"
-                  style={{ borderTop: i === 0 ? "none" : `1px solid ${"var(--rd-row-border)"}`, opacity: it.recebido ? 0.55 : 1 }}
-                >
-                  <div
-                    className="flex-shrink-0 flex items-center justify-center rounded-lg"
-                    style={{
-                      width: 38,
-                      height: 38,
-                      background: "var(--rd-surface-2)",
-                      color: it.recebido ? "var(--rd-positive)" : it.atrasado ? "var(--rd-negative)" : "var(--rd-text)",
-                      fontWeight: 700,
-                      fontSize: 13 }}
-                  >
-                    {String(it.dia).padStart(2, "0")}
-                  </div>
-                  <div className="flex-1 min-w-0" style={{}}>
-                    <div className="truncate text-xs" style={{ color: "var(--rd-text)" }}>{it.label}</div>
-                    {/* o estado vem do Caixa: lançou o pagamento da moto, a linha muda aqui */}
-                    <div className="text-xs" style={{ color: it.recebido ? "var(--rd-positive)" : it.atrasado ? "var(--rd-negative)" : "var(--rd-text-dim)" }}>
-                      {it.sub || ""}
-                      {it.recebido ? `${it.sub ? " · " : ""}já recebido` : it.atrasado ? `${it.sub ? " · " : ""}atrasado` : ""}
-                    </div>
-                  </div>
-                  <span
-                    className="text-xs flex-shrink-0"
-                    style={{ color: it.atrasado ? "var(--rd-negative)" : "var(--rd-positive)", fontWeight: 700 }}
-                  >
-                    {formatCurrency(it.valor)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {cobrancas.agora.length > 5 && (
-            <button
-              onClick={() => setVerTodasCobrancas((v) => !v)}
-              className="text-xs font-semibold mt-2"
-              style={{ color: "var(--rd-positive)", minHeight: 32 }}
-            >
-              {verTodasCobrancas ? "Ver menos" : `Ver mais (${cobrancas.agora.length - 5})`}
-            </button>
-          )}
-
-          {/* contratos fechados neste mês: a 1ª cobrança cai só no mês seguinte. Aqui o
-              mês aparece de propósito, porque é justamente a informação que faltava —
-              junto com a data em que o cliente alugou, que não existia em lugar nenhum */}
-          {cobrancas.depois.length > 0 && (
-            <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${"var(--rd-row-border)"}` }}>
-              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--rd-text-dim)" }}>
-                A partir do mês que vem
-              </div>
-              <div className="flex flex-col">
-                {cobrancas.depois.map((it, i) => (
-                  <div
-                    key={it.id}
-                    className="flex items-center gap-3 py-2.5"
-                    style={{ borderTop: i === 0 ? "none" : `1px solid ${"var(--rd-row-border)"}` }}
-                  >
-                    <div
-                      className="flex-shrink-0 flex items-center justify-center rounded-lg"
-                      style={{ width: 38, height: 38, background: "var(--rd-surface-2)", color: "var(--rd-attention)", fontWeight: 700, fontSize: 13 }}
-                    >
-                      {String(it.dia).padStart(2, "0")}
-                    </div>
-                    <div className="flex-1 min-w-0" style={{}}>
-                      <div className="truncate text-xs" style={{ color: "var(--rd-text)" }}>{it.label}</div>
-                      <div className="text-xs" style={{ color: "var(--rd-text-dim)" }}>
-                        {it.sub ? `${it.sub} · ` : ""}
-                        {it.desde ? `alugou em ${formatDate(it.desde)}` : "sem data de início"}
-                      </div>
-                      <div className="text-xs" style={{ color: "var(--rd-attention)" }}>
-                        1ª cobrança em {monthLabel(it.mesDaPrimeira)}
-                      </div>
-                    </div>
-                    <span className="text-xs flex-shrink-0" style={{ color: "var(--rd-text-dim)", fontWeight: 700 }}>
-                      {formatCurrency(it.valor)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* os três números do ano em UM cartão, em vez de três cartões com duas linhas de
-          jargão cada ("fixo/mês", "avulso") — a aba abria com quatro blocos de resumo
-          antes de mostrar qualquer conta, e era isso que fazia ela parecer cheia demais */}
-      <div className="rounded-2xl p-4 mb-4" style={{ background: "var(--rd-surface)", border: `1px solid ${"var(--rd-border)"}` }}>
-        <div className="text-xs uppercase tracking-wide mb-3" style={{ color: "var(--rd-text-dim)" }}>
-          Próximos 12 meses
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <div className="text-xs mb-0.5" style={{ color: "var(--rd-text-dim)" }}>A receber</div>
-            <div style={{ fontSize: 18, color: "var(--rd-positive)" }}>{formatCurrency(previstoEntrada12Meses)}</div>
-          </div>
-          <div>
-            <div className="text-xs mb-0.5" style={{ color: "var(--rd-text-dim)" }}>A pagar</div>
-            <div style={{ fontSize: 18, color: "var(--rd-negative)" }}>{formatCurrency(previstoSaida12Meses)}</div>
-          </div>
-          <div>
-            <div className="text-xs mb-0.5" style={{ color: "var(--rd-text-dim)" }}>Sobra prevista</div>
-            <div style={{ fontSize: 18, color: saldoPrevisto12Meses >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
-              {formatCurrency(saldoPrevisto12Meses)}
-            </div>
           </div>
         </div>
       </div>
 
-      {recorrentes.length > 0 && (
-        <div className="flex flex-col" style={{ gap: 10, marginBottom: 18 }}>
-          <span style={RD_LABEL}>Todo mês</span>
-          <div className="flex flex-col" style={{ gap: 8 }}>
-            {(verTodosFixos ? gruposFixos : gruposFixos.slice(0, 4)).map((g) =>
-              g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
-            )}
-          </div>
-          {gruposFixos.length > 4 && (
-            <button
-              onClick={() => setVerTodosFixos((v) => !v)}
-              className="text-xs font-semibold mt-2"
-              style={{ color: "var(--rd-positive)", minHeight: 32 }}
-            >
-              {verTodosFixos ? "Ver menos" : `Ver mais (${gruposFixos.length - 4})`}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col" style={{ gap: 10 }}>
-        <span style={RD_LABEL}>Parcelamentos</span>
-        {gruposAvulsos.length === 0 ? (
-          <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: `1px solid ${"var(--rd-border)"}` }}>
-            Nenhum parcelamento ou conta com data marcada.
-          </div>
-        ) : (
-          <>
-            <div className="flex flex-col" style={{ gap: 8 }}>
-              {(verTodosAvulsos ? gruposAvulsos : gruposAvulsos.slice(0, 4)).map((g) =>
-                g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
-              )}
-            </div>
-            {gruposAvulsos.length > 4 && (
-              <button
-                onClick={() => setVerTodosAvulsos((v) => !v)}
-                className="text-xs font-semibold mt-2"
-                style={{ color: "var(--rd-positive)", minHeight: 32 }}
-              >
-                {verTodosAvulsos ? "Ver menos" : `Ver mais (${gruposAvulsos.length - 4})`}
-              </button>
-            )}
-          </>
-        )}
+      <div className="mbr-futuros-grid">
+        <Coluna
+          entrada
+          titulo="Vou receber"
+          total={contas.aReceber}
+          itens={contas.receber}
+          vazio={`Nada pra receber em ${monthLabel(mes)}.`}
+          rodape={
+            contas.proximoMes.length > 0 ? (
+              <div style={{ marginTop: "var(--rd-s5)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+                <div style={{ ...RD_LABEL, color: "var(--rd-text-faint)", marginBottom: 4 }}>A partir do mês que vem</div>
+                {contas.proximoMes.map((item) => (
+                  <LinhaConta2 key={item.id} item={{ ...item, feito: false, diasAte: 99 }} entrada rotuloAcao="" rotuloFeito="" />
+                ))}
+              </div>
+            ) : null
+          }
+        />
+        <Coluna
+          entrada={false}
+          titulo="Vou pagar"
+          total={contas.aPagar}
+          itens={contas.pagar}
+          vazio={`Nenhuma conta em ${monthLabel(mes)}.`}
+        />
       </div>
 
       {modal && (
@@ -5503,7 +5386,6 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   };
   const podeVoltarMes = mesVisivel > mesMaisAntigo;
-  const podeAvancarMes = mesVisivel < mesMaisNovo;
   // os números e a lista do mês que está na tela (lançado + o que ainda está previsto)
   const lancadosDoMes = porMes[mesVisivel] || [];
   const previstosDoMes = pendenciasPorMes[mesVisivel] || [];
@@ -5513,139 +5395,33 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   const saldoDoMes = entradaDoMes - saidaDoMes;
   const [detalheAberto, setDetalheAberto] = useState(null);
   const [grupoLancAberto, setGrupoLancAberto] = useState(null);
+  const [filtroTipo, setFiltroTipo] = useState("tudo");
+  const [busca, setBusca] = useState("");
 
-  // Uma linha de lançamento. Virou componente pra poder aparecer tanto solta quanto
-  // dentro de um grupo de lançamentos de mesmo nome (ex.: o rastreador lançado pra 11
-  // motos no mesmo mês, que antes eram 11 linhas iguais seguidas).
-  const LinhaLancamento = ({ l, ultimo }) => {
-                    const motoLigada = motos?.find((m) => m.id === l.motoId);
-                    const detalheEsteAberto = detalheAberto === l.id;
-                    const temDetalhe = !!(l.natureza || l.forma || l.descricao);
-                    const pendente = !!l._pendente;
-                    const corItem = pendente ? "var(--rd-attention)" : l.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)";
-                    return (
-                      <div
-                        key={l.id}
-                        style={{
-                          background: pendente ? "var(--rd-attention-bg)" : "var(--rd-surface-2)",
-                          borderBottom: ultimo ? "none" : "1px solid var(--rd-row-border)" }}
-                      >
-                        <div onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)} className="flex items-center justify-between cursor-pointer" style={{ padding: "13px 18px" }}>
-                          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
-                            <div
-                              className="flex items-center justify-center flex-shrink-0"
-                              style={{ width: 30, height: 30, borderRadius: 9, background: pendente ? "#2A2115" : "var(--rd-surface)" }}
-                            >
-                              {pendente ? (
-                                <Clock size={15} color="var(--rd-attention)" />
-                              ) : l.tipo === "entrada" ? (
-                                <TrendingUp size={15} color="var(--rd-positive)" />
-                              ) : (
-                                <TrendingDown size={15} color="var(--rd-negative)" />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
-                                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>
-                                  {l.categoria || "Sem categoria"}
-                                </span>
-                                {l.parcelasTotal > 1 && (
-                                  <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface)", color: "var(--rd-text-dim)" }}>
-                                    Parcela {l.parcelaAtual || 1}/{l.parcelasTotal}
-                                  </span>
-                                )}
-                                {pendente && (
-                                  <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "#2A2115", color: "var(--rd-attention)" }}>
-                                    Previsto
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
-                                {formatDate(l.data)}
-                                {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
-                                {pendente && l.recorrente && " · fixo mensal"}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center flex-shrink-0" style={{ gap: 2 }}>
-                            <span style={{ color: corItem, fontWeight: 700, fontSize: 15 }}>
-                              {l.tipo === "entrada" ? "+ " : "− "}
-                              {formatCurrency(l.valor)}
-                            </span>
-                            {(temDetalhe || pendente || permissoes.podeEditar) &&
-                              (detalheEsteAberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />)}
-                            {!pendente && permissoes.podeEditar && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  excluir(l.id);
-                                }}
-                                className="mbr-hover-grow flex items-center justify-center"
-                                style={{ color: "var(--rd-text-dim)", width: 34, height: 34, marginRight: -8 }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        {pendente ? (
-                          <Collapse open={detalheEsteAberto}>
-                            <div className="flex flex-col" style={{ gap: 10, padding: "10px 18px 14px", borderTop: "1px solid var(--rd-row-border)" }}>
-                              <div style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
-                                Ainda não {l.tipo === "entrada" ? "recebido" : "pago"} — essa conta está cadastrada em "Futuros" e ainda não virou um lançamento real.
-                              </div>
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    confirmarFuturo(l);
-                                  }}
-                                  className="flex items-center justify-center"
-                                  style={{ gap: 7, borderRadius: 12, padding: "9px 0", fontWeight: 700, fontSize: 13, background: "var(--rd-brand-soft)", color: "var(--rd-shell)" }}
-                                >
-                                  <CheckCircle2 size={14} /> Confirmar {l.tipo === "entrada" ? "recebimento" : "pagamento"}
-                                </button>
-                              )}
-                            </div>
-                          </Collapse>
-                        ) : (
-                          <Collapse open={detalheEsteAberto}>
-                            <div className="flex flex-col" style={{ gap: 7, padding: "10px 18px 14px", borderTop: "1px solid var(--rd-row-border)" }}>
-                              {l.natureza && (
-                                <div className="flex items-center justify-between" style={{ fontSize: 12 }}>
-                                  <span style={{ color: "var(--rd-text-faint)" }}>Natureza</span>
-                                  <span style={{ color: "var(--rd-text-muted)" }}>{l.natureza}</span>
-                                </div>
-                              )}
-                              {l.forma && (
-                                <div className="flex items-center justify-between" style={{ fontSize: 12 }}>
-                                  <span style={{ color: "var(--rd-text-faint)" }}>Forma de pagamento</span>
-                                  <span style={{ color: "var(--rd-text-muted)" }}>{l.forma}</span>
-                                </div>
-                              )}
-                              {l.descricao && (
-                                <div className="flex items-center justify-between" style={{ gap: 12, fontSize: 12 }}>
-                                  <span style={{ color: "var(--rd-text-faint)", flexShrink: 0 }}>Detalhe</span>
-                                  <span style={{ color: "var(--rd-text-muted)", textAlign: "right" }}>{l.descricao}</span>
-                                </div>
-                              )}
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setModal(l);
-                                  }}
-                                  className="flex items-center"
-                                  style={{ gap: 5, color: "var(--rd-brand-light)", fontSize: 12, fontWeight: 700, minHeight: 32, marginTop: 2, background: "none" }}
-                                >
-                                  <Pencil size={12} /> Editar
-                                </button>
-                              )}
-                            </div>
-                          </Collapse>
-                        )}
-                      </div>
-                    );
+  // "Recebi" na aba Futuros, numa linha de contrato: cria a entrada no Caixa já ligada
+  // à moto — é o que faz a cobrança sair de "a receber" em toda a tela
+  const receberMensalidade = async (moto, mesKey) => {
+    if (!moto?.contratoAtual) return;
+    const valor = Number(moto.contratoAtual.valorMensal) || 0;
+    if (!window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)}?`)) return;
+    const dia = Math.min(diaVencimentoDoContrato(moto.contratoAtual) || 1, new Date(Number(mesKey.slice(0, 4)), Number(mesKey.slice(5, 7)), 0).getDate());
+    const hoje = todayISO();
+    await persist([
+      ...lancamentos,
+      {
+        id: uid(),
+        // dentro do mês corrente usa hoje; num mês passado/futuro usa o dia do vencimento
+        data: mesKey === hoje.slice(0, 7) ? hoje : `${mesKey}-${String(dia).padStart(2, "0")}`,
+        tipo: "entrada",
+        natureza: "Operacional",
+        categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+        valor,
+        descricao: "",
+        forma: "",
+        motoId: moto.id,
+        parcelas: 1,
+      },
+    ]);
   };
 
   const agruparLancamentos = (lista) => {
@@ -5658,66 +5434,215 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     return [...grupos.values()];
   };
 
-  const GrupoLancamentos = ({ grupo, ultimo }) => {
+  // busca e filtro por tipo valem sobre o mês que está na tela
+  const textoDoItem = (l) => {
+    const moto = motos?.find((m) => m.id === l.motoId);
+    return `${l.categoria || ""} ${l.descricao || ""} ${l.natureza || ""} ${moto ? `${moto.placa} ${formatPlaca(moto.placa)}` : ""}`.toLowerCase();
+  };
+  const buscaLimpa = busca.trim().toLowerCase();
+  const itensFiltrados = itensDoMes.filter(
+    (l) => (filtroTipo === "tudo" || l.tipo === filtroTipo) && (!buscaLimpa || textoDoItem(l).includes(buscaLimpa))
+  );
+  const gruposDoMes = agruparLancamentos(itensFiltrados);
+  const somaVisivel = itensFiltrados.reduce((s2, l) => s2 + (l.tipo === "entrada" ? 1 : -1) * (Number(l.valor) || 0), 0);
+
+  // PARA ONDE FOI — as saídas do mês somadas por natureza, a maior primeiro
+  const paraOndeFoi = (() => {
+    const cores = ["var(--rd-negative)", "var(--rd-attention)", "var(--rd-brand-light)", "var(--rd-text-muted)"];
+    const por = new Map();
+    lancadosDoMes
+      .filter((l) => l.tipo === "saida")
+      .forEach((l) => {
+        const nome = l.natureza || "Sem classificação";
+        por.set(nome, (por.get(nome) || 0) + (Number(l.valor) || 0));
+      });
+    const lista = [...por.entries()].map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor);
+    const maior = lista[0]?.valor || 1;
+    return lista.slice(0, 5).map((c, i) => ({ ...c, pct: Math.max(3, (c.valor / maior) * 100), cor: cores[i % cores.length] }));
+  })();
+
+  // ÚLTIMOS 6 MESES — o saldo de cada um, terminando no mês que está na tela
+  const seisMeses = (() => {
+    const [ano, mesN] = (mesVisivel || mesAtualKey).split("-").map(Number);
+    const out = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(ano, mesN - 1 - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const doMes = porMes[key] || [];
+      const entrou = doMes.filter((l) => l.tipo === "entrada").reduce((s2, l) => s2 + Number(l.valor || 0), 0);
+      const saiu = doMes.filter((l) => l.tipo === "saida").reduce((s2, l) => s2 + Number(l.valor || 0), 0);
+      out.push({ key, rotulo: monthLabel(key).slice(0, 3).toLowerCase(), saldo: entrou - saiu });
+    }
+    return out;
+  })();
+  const maxSeis = Math.max(1, ...seisMeses.map((m) => Math.abs(m.saldo)));
+  const mediaSeis = seisMeses.reduce((s2, m) => s2 + m.saldo, 0) / (seisMeses.length || 1);
+
+  // EXPORTAR — baixa o mês em CSV (abre direto no Excel/Sheets)
+  const exportarMes = () => {
+    const linhas = [["Data", "Tipo", "Nome", "Classificação", "Moto", "Valor"]];
+    [...itensDoMes]
+      .filter((l) => !l._pendente)
+      .sort((a, b) => (a.data < b.data ? -1 : 1))
+      .forEach((l) => {
+        const moto = motos?.find((m) => m.id === l.motoId);
+        linhas.push([
+          formatDate(l.data),
+          l.tipo === "entrada" ? "Entrada" : "Saída",
+          l.categoria || "",
+          l.natureza || "",
+          moto ? formatPlaca(moto.placa) : "",
+          String(Number(l.valor) || 0).replace(".", ","),
+        ]);
+      });
+    const csv = linhas.map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `caixa-${mesVisivel}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // UMA LINHA DA LISTA — serve pro lançamento solto e pro grupo de iguais (o rastreador
+  // lançado pra 8 motos no mesmo mês vira uma linha "8x" que abre)
+  const LinhaCaixa = ({ grupo }) => {
     const itens = grupo.itens;
     const primeiro = itens[0];
+    const varios = itens.length > 1;
     const aberto = grupoLancAberto === grupo.chave;
-    const total = itens.reduce((s, l) => s + (Number(l.valor) || 0), 0);
+    const total = itens.reduce((s2, l) => s2 + (Number(l.valor) || 0), 0);
     const pendente = !!primeiro._pendente;
-    const cor = pendente ? "var(--rd-attention)" : primeiro.tipo === "entrada" ? "var(--rd-positive)" : "var(--rd-negative)";
+    const entrada = primeiro.tipo === "entrada";
+    const cor = pendente ? "var(--rd-attention-text)" : entrada ? "var(--rd-positive)" : "var(--rd-negative)";
+    const moto = motos?.find((m) => m.id === primeiro.motoId);
+    const placas = itens
+      .map((x) => motos?.find((m) => m.id === x.motoId))
+      .filter(Boolean)
+      .map((m) => formatPlaca(m.placa));
+    const sub = varios
+      ? placas.length > 0
+        ? [...placas.slice(0, 3), ...(placas.length > 3 ? [`+${placas.length - 3}`] : [])].join(" · ")
+        : `${itens.length} lançamentos iguais`
+      : [moto ? formatPlaca(moto.placa) : "", primeiro.parcelasTotal > 1 ? `parcela ${primeiro.parcelaAtual || 1}/${primeiro.parcelasTotal}` : "", primeiro.descricao || ""]
+          .filter(Boolean)
+          .join(" · ");
+    const mesCurto = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number((primeiro.data || "").slice(5, 7)) - 1] || "";
     return (
-      <div style={{ borderBottom: ultimo ? "none" : "1px solid var(--rd-row-border)", background: pendente ? "var(--rd-attention-bg)" : "var(--rd-surface-2)" }}>
+      <div>
         <div
-          onClick={() => setGrupoLancAberto(aberto ? null : grupo.chave)}
-          className="flex items-center justify-between cursor-pointer"
-          style={{ padding: "13px 18px" }}
+          className="flex items-center flex-wrap"
+          style={{ gap: 10, padding: "11px 0", borderTop: "1px solid var(--rd-row-border)", cursor: varios ? "pointer" : "default" }}
+          onClick={varios ? () => setGrupoLancAberto(aberto ? null : grupo.chave) : undefined}
         >
-          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
-            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface)" }}>
-              {primeiro.tipo === "entrada" ? <TrendingUp size={15} color="var(--rd-positive)" /> : <TrendingDown size={15} color="var(--rd-negative)" />}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
-                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>{primeiro.categoria || "Sem categoria"}</span>
-                <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: "var(--rd-surface)", color: "var(--rd-text-dim)", flex: "none" }}>
+          <div className="flex flex-col items-center justify-center flex-none" style={{ width: 40 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1, color: "var(--rd-text)" }}>{(primeiro.data || "").slice(8, 10) || "--"}</span>
+            <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-faint)" }}>{mesCurto}</span>
+          </div>
+          <span
+            className="flex items-center justify-center flex-none"
+            style={{ width: 30, height: 30, borderRadius: 9, background: pendente ? "var(--rd-attention-bg-2)" : "var(--rd-surface-2)" }}
+          >
+            {pendente ? <Clock size={14} color="var(--rd-attention)" /> : entrada ? <TrendingUp size={14} color="var(--rd-positive)" /> : <TrendingDown size={14} color="var(--rd-negative)" />}
+          </span>
+          <div className="flex flex-col" style={{ gap: 2, minWidth: 0, flex: "1 1 130px" }}>
+            <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
+              <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{primeiro.categoria || "Sem nome"}</span>
+              {varios && (
+                <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 7px", background: "var(--rd-surface-2)", color: "var(--rd-text-dim)" }}>
                   {itens.length}x
                 </span>
-              </div>
-              <div style={{ color: "var(--rd-text-dim)", fontSize: 11.5 }}>
-                {/* mostra as placas no resumo: sem isso, três trocas de óleo de motos
-                    diferentes viravam uma linha só e dava a impressão de terem sumido */}
-                {(() => {
-                  const placas = itens
-                    .map((x) => motos?.find((m) => m.id === x.motoId))
-                    .filter(Boolean)
-                    .map((m) => formatPlaca(m.placa));
-                  return placas.length > 0
-                    ? placas.join(" · ")
-                    : `${itens.length} lançamentos iguais neste mês`;
-                })()}
-              </div>
+              )}
+              {pendente && (
+                <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 7px", background: "var(--rd-attention-bg-2)", color: "var(--rd-attention-text)" }}>
+                  Previsto
+                </span>
+              )}
             </div>
+            {sub && <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>{sub}</span>}
           </div>
-          <div className="flex items-center flex-shrink-0" style={{ gap: 4 }}>
-            <span style={{ color: cor, fontWeight: 700, fontSize: 15 }}>
-              {primeiro.tipo === "entrada" ? "+ " : "\u2212 "}
-              {formatCurrency(total)}
+          {primeiro.natureza && (
+            <span
+              className="mbr-col-extra flex-none"
+              style={{
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                borderRadius: 999,
+                padding: "3px 9px",
+                border: "1px solid var(--rd-border)",
+                color: "var(--rd-text-muted)",
+                whiteSpace: "nowrap" }}
+            >
+              {primeiro.natureza}
             </span>
-            {aberto ? <ChevronUp size={16} color="var(--rd-text-dim)" /> : <ChevronDown size={16} color="var(--rd-text-dim)" />}
-          </div>
+          )}
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: cor, whiteSpace: "nowrap", marginLeft: "auto" }}>
+            {entrada ? "+ " : "− "}
+            {formatCurrency(total)}
+          </span>
+          {varios ? (
+            aberto ? <ChevronUp size={15} color="var(--rd-text-dim)" /> : <ChevronDown size={15} color="var(--rd-text-dim)" />
+          ) : pendente ? (
+            permissoes.podeEditar && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  confirmarFuturo(primeiro);
+                }}
+                className="flex-none mbr-hover-grow"
+                style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "5px 11px", border: "1px solid var(--rd-attention-border)", color: "var(--rd-attention-text)" }}
+              >
+                Confirmar
+              </button>
+            )
+          ) : (
+            permissoes.podeEditar && (
+              <span className="flex items-center flex-none" style={{ gap: 2 }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setModal(primeiro); }}
+                  title="Editar"
+                  className="flex items-center justify-center mbr-hover-grow"
+                  style={{ width: 26, height: 26, color: "var(--rd-text-faint)" }}
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); excluir(primeiro.id); }}
+                  title="Excluir"
+                  className="flex items-center justify-center mbr-hover-grow"
+                  style={{ width: 26, height: 26, color: "var(--rd-negative)" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </span>
+            )
+          )}
         </div>
-        <Collapse open={aberto}>
-          <div style={{ borderTop: "1px solid var(--rd-row-border)" }}>
-            {itens.map((l, i) => (
-              <LinhaLancamento key={l.id} l={l} ultimo={i === itens.length - 1} />
-            ))}
-          </div>
-        </Collapse>
+        {varios && (
+          <Collapse open={aberto}>
+            <div style={{ paddingLeft: 52 }}>
+              {itens.map((l) => (
+                <LinhaCaixa key={l.id} grupo={{ chave: `um:${l.id}`, itens: [l] }} />
+              ))}
+            </div>
+          </Collapse>
+        )}
       </div>
     );
   };
 
   const [view, setView] = useState("lancado");
+  // em "Futuros" dá pra olhar o que vem pela frente (até 12 meses); em "Lançado" não
+  // faz sentido passar do mês corrente — lá só existe o que já aconteceu
+  const mesLimite = (() => {
+    if (view !== "futuros") return mesMaisNovo;
+    const [ano, mesN] = mesAtualKey.split("-").map(Number);
+    const d = new Date(ano, mesN - 1 + 12, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
+  const podeAvancarMes = mesVisivel < mesLimite;
   const futurosViewRef = useRef(null);
 
   const viewToggleRef = useRef(null);
@@ -5743,9 +5668,45 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
 
   return (
     <div className="flex flex-col" style={{ gap: 18, fontFamily: "var(--rd-font)" }}>
-      <div className="flex items-center flex-wrap" style={{ gap: 16 }}>
+      <div className="flex items-center flex-wrap" style={{ gap: 12 }}>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>Caixa</h1>
-        <div className="flex items-center" style={{ gap: 10, marginLeft: "auto" }}>
+        {/* o mês manda nas duas abas: em "Lançado" recorta a lista, em "Futuros" diz
+            de qual mês são as contas */}
+        <div
+          className="flex items-center"
+          style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
+        >
+          <button
+            onClick={() => podeVoltarMes && setMesVisivel(mesVizinho(-1))}
+            disabled={!podeVoltarMes}
+            aria-label="Mês anterior"
+            className="flex items-center justify-center"
+            style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeVoltarMes ? 1 : 0.35 }}
+          >
+            <ChevronLeft size={15} strokeWidth={2.75} />
+          </button>
+          <span className="text-center" style={{ minWidth: 62, fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>
+            {monthLabel(mesVisivel)}
+          </span>
+          <button
+            onClick={() => podeAvancarMes && setMesVisivel(mesVizinho(1))}
+            disabled={!podeAvancarMes}
+            aria-label="Próximo mês"
+            className="flex items-center justify-center"
+            style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeAvancarMes ? 1 : 0.35 }}
+          >
+            <ChevronRight size={15} strokeWidth={2.75} />
+          </button>
+        </div>
+        {mesVisivel !== mesAtualKey && (
+          <button
+            onClick={() => setMesVisivel(mesAtualKey)}
+            style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "5px 12px", background: "var(--rd-brand)", color: "var(--rd-brand-light)" }}
+          >
+            Atual
+          </button>
+        )}
+        <div className="flex items-center flex-wrap" style={{ gap: 10, marginLeft: "auto" }}>
           <div
             ref={viewToggleRef}
             className="relative flex"
@@ -5788,6 +5749,15 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
               </button>
             ))}
           </div>
+          {view === "lancado" && (
+            <button
+              onClick={exportarMes}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "8px 15px", fontSize: 12.5, fontWeight: 600 }}
+            >
+              <Download size={14} strokeWidth={2.5} /> Exportar
+            </button>
+          )}
           {/* um botão só que "vira" o outro ao trocar de aba — mesmo elemento, o texto
               troca (num único span remontado, sem dois textos coexistindo) e a caixa
               cresce/encolhe pra caber, em vez de um botão sumir aqui e outro nascer
@@ -5825,88 +5795,197 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           motos={motos}
           clientes={clientes}
           onConfirmar={confirmarFuturo}
+          mesVisivel={mesVisivel}
           mesAtualKey={mesAtualKey}
           lancamentos={lancamentos}
+          onReceberContrato={receberMensalidade}
           onExcluido={(f, rotulo) => oferecerDesfazer(rotulo, f, "futuro")}
         />
       ) : (
         <>
-      {mesesOrdenados.length === 0 && (
-        <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", color: "var(--rd-text-dim)", border: "1px solid var(--rd-border)" }}>
-          Nenhum lançamento ainda.
-        </div>
-      )}
-
-      {ordenados.length > 0 && (
-        <>
-          {/* UM MÊS POR VEZ. O resumo é só do mês escolhido, e as setas andam de mês em
-              mês — antes a tela empilhava o resumo e a lista de TODOS os meses de uma
-              vez, o que é informação demais pra achar o que interessa */}
-          <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "14px 18px" }}>
-            <div className="flex items-center flex-wrap" style={{ gap: 12 }}>
-              <div
-                className="flex items-center"
-                style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
-              >
-                <button
-                  onClick={() => podeVoltarMes && setMesVisivel(mesVizinho(-1))}
-                  disabled={!podeVoltarMes}
-                  aria-label="Mês anterior"
-                  className="flex items-center justify-center"
-                  style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeVoltarMes ? 1 : 0.35 }}
-                >
-                  <ChevronLeft size={15} strokeWidth={2.75} />
-                </button>
-                <span className="text-center" style={{ minWidth: 62, fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>
-                  {monthLabel(mesVisivel)}
+          {/* FAIXA DO MÊS — entrou, saiu e o saldo, só do mês que está na tela */}
+          <div
+            className="mbr-caixa-resumo"
+            style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16 }}
+          >
+            {[
+              { rotulo: "Entrou", valor: entradaDoMes, cor: "var(--rd-positive)", Icone: TrendingUp },
+              { rotulo: "Saiu", valor: saidaDoMes, cor: "var(--rd-negative)", Icone: TrendingDown },
+              { rotulo: "Saldo do mês", valor: saldoDoMes, cor: saldoDoMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)", Icone: null },
+            ].map(({ rotulo, valor, cor, Icone }) => (
+              <div key={rotulo} className="flex items-center" style={{ gap: 12 }}>
+                {Icone && (
+                  <span
+                    className="flex items-center justify-center flex-none"
+                    style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}
+                  >
+                    <Icone size={15} color={cor} />
+                  </span>
+                )}
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)" }}>
+                  {rotulo}
                 </span>
-                <button
-                  onClick={() => podeAvancarMes && setMesVisivel(mesVizinho(1))}
-                  disabled={!podeAvancarMes}
-                  aria-label="Próximo mês"
-                  className="flex items-center justify-center"
-                  style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeAvancarMes ? 1 : 0.35 }}
-                >
-                  <ChevronRight size={15} strokeWidth={2.75} />
-                </button>
-              </div>
-              {mesVisivel !== mesAtualKey && (
-                <button
-                  onClick={() => setMesVisivel(mesAtualKey)}
-                  style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "4px 11px", background: "var(--rd-brand)", color: "var(--rd-brand-light)" }}
-                >
-                  Atual
-                </button>
-              )}
-              <div className="flex items-center flex-wrap" style={{ gap: 16, marginLeft: "auto", fontSize: 12.5 }}>
-                <span style={{ color: "var(--rd-text-dim)" }}>
-                  Entrou <b style={{ color: "var(--rd-positive)" }}>{formatCurrency(entradaDoMes)}</b>
-                </span>
-                <span style={{ color: "var(--rd-text-dim)" }}>
-                  Saiu <b style={{ color: "var(--rd-negative)" }}>{formatCurrency(saidaDoMes)}</b>
-                </span>
-                <span style={{ color: "var(--rd-text-dim)" }}>
-                  Saldo{" "}
-                  <b style={{ color: saldoDoMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>{formatCurrency(saldoDoMes)}</b>
+                <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.03em", color: cor, marginLeft: "auto" }}>
+                  {formatCurrency(valor)}
                 </span>
               </div>
-            </div>
+            ))}
           </div>
 
-          <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
-            {itensDoMes.length === 0 ? (
-              <div className="p-6 text-center" style={{ color: "var(--rd-text-dim)", fontSize: 13 }}>
-                Nenhum lançamento em {monthLabel(mesVisivel)}.
-              </div>
-            ) : (
-              agruparLancamentos(itensDoMes).map((g, gi, arr) =>
-                g.itens.length === 1 ? (
-                  <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
+          <div className="mbr-detalhe-grid">
+            {/* ---------- LISTA ---------- */}
+            <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+              <div
+                className="mbr-cresce"
+                style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
+              >
+                <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s4)" }}>
+                  <span style={RD_LABEL}>Lançamentos</span>
+                  <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+                    <div className="mbr-filtros" style={{ minWidth: 0 }}>
+                      {[
+                        { id: "tudo", label: "Tudo" },
+                        { id: "entrada", label: "Entradas" },
+                        { id: "saida", label: "Saídas" },
+                      ].map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => setFiltroTipo(f.id)}
+                          style={{
+                            padding: "5px 12px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: filtroTipo === f.id ? 700 : 600,
+                            background: filtroTipo === f.id ? "var(--rd-brand)" : "transparent",
+                            color: filtroTipo === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative" style={{ flex: "1 1 170px", minWidth: 150 }}>
+                      <Search size={13} strokeWidth={2.75} style={{ position: "absolute", left: 12, top: 9, color: "var(--rd-text-faint)" }} />
+                      <input
+                        value={busca}
+                        onChange={(e) => setBusca(e.target.value)}
+                        placeholder="Buscar ou filtrar por placa"
+                        style={{
+                          width: "100%",
+                          background: "var(--rd-surface-2)",
+                          border: "1px solid var(--rd-border)",
+                          borderRadius: 999,
+                          padding: "7px 12px 7px 32px",
+                          color: "var(--rd-text)",
+                          fontSize: 12,
+                          fontFamily: "var(--rd-font)" }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {gruposDoMes.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>
+                    {busca || filtroTipo !== "tudo" ? "Nada com esse filtro." : `Nenhum lançamento em ${monthLabel(mesVisivel)}.`}
+                  </div>
                 ) : (
-                  <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
-                )
-              )
-            )}
+                  gruposDoMes.map((g) => <LinhaCaixa key={g.chave} grupo={g} />)
+                )}
+
+                <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
+                  <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                    {itensFiltrados.length} lançamento{itensFiltrados.length === 1 ? "" : "s"}
+                  </span>
+                  <span className="flex items-center" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Soma do que está à vista</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 700, color: somaVisivel >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                      {formatCurrency(somaVisivel)}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* ---------- COLUNA DA DIREITA ---------- */}
+            <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Para onde foi</div>
+                {paraOndeFoi.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>Nenhuma saída em {monthLabel(mesVisivel)}.</div>
+                ) : (
+                  paraOndeFoi.map((c, i) => (
+                    <div key={c.nome} style={{ marginBottom: i === paraOndeFoi.length - 1 ? 0 : "var(--rd-s4)" }}>
+                      <div className="flex items-center justify-between" style={{ gap: 10, marginBottom: 6 }}>
+                        <span className="truncate" style={{ fontSize: 13, color: "var(--rd-text)" }}>{c.nome}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)", whiteSpace: "nowrap" }}>{formatCurrency(c.valor)}</span>
+                      </div>
+                      <div style={{ height: 4, borderRadius: 999, background: "var(--rd-surface-2)" }}>
+                        <div style={{ width: `${c.pct}%`, height: "100%", borderRadius: 999, background: c.cor }} />
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                <div className="flex items-baseline justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s4)" }}>
+                  <span style={RD_LABEL}>Últimos 6 meses</span>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+                    média <b style={{ color: mediaSeis >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>{formatCurrencyCurto(mediaSeis)}</b>
+                  </span>
+                </div>
+                <div className="flex items-end" style={{ gap: 8, height: 92 }}>
+                  {seisMeses.map((m) => (
+                    <button
+                      key={m.key}
+                      onClick={() => setMesVisivel(m.key)}
+                      title={`${monthLabel(m.key)} · ${formatCurrency(m.saldo)}`}
+                      className="flex flex-col items-center"
+                      style={{ flex: 1, gap: 6, background: "none", minWidth: 0 }}
+                    >
+                      <span
+                        style={{
+                          width: "100%",
+                          height: Math.max(6, (Math.abs(m.saldo) / maxSeis) * 66),
+                          borderRadius: 7,
+                          background: m.saldo >= 0 ? "var(--rd-brand-light)" : "var(--rd-negative)",
+                          opacity: m.key === mesVisivel ? 1 : 0.62 }}
+                      />
+                      <span style={{ fontSize: 10.5, color: m.key === mesVisivel ? "var(--rd-text)" : "var(--rd-text-faint)", fontWeight: m.key === mesVisivel ? 700 : 500 }}>
+                        {m.rotulo}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {permissoes.podeEditar && (
+                <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                  <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Atalhos</div>
+                  <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+                    {[
+                      { label: "+ Receber mensalidade", base: { tipo: "entrada", natureza: "Operacional", categoria: "Mensalidade" }, destaque: true },
+                      { label: "Lançar manutenção", base: { tipo: "saida", natureza: "Manutenção", categoria: "" } },
+                      { label: "Pagar comissão", base: { tipo: "saida", natureza: "Operacional", categoria: "Comissão" } },
+                    ].map((a) => (
+                      <button
+                        key={a.label}
+                        onClick={() => setModal({ ...emptyLancamento(), ...a.base })}
+                        style={{
+                          fontSize: 12.5,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          padding: "9px 15px",
+                          background: a.destaque ? "var(--rd-brand)" : "var(--rd-surface-2)",
+                          border: `1px solid ${a.destaque ? "var(--rd-brand)" : "var(--rd-border)"}`,
+                          color: a.destaque ? "var(--rd-brand-light)" : "var(--rd-text-muted)" }}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* lançamentos sem data não pertencem a mês nenhum — ficam num bloco à parte
@@ -5914,19 +5993,13 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           {(porMes["sem-data"] || []).length > 0 && (
             <div className="flex flex-col" style={{ gap: 10 }}>
               <span style={RD_LABEL}>Sem data</span>
-              <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
-                {agruparLancamentos(porMes["sem-data"]).map((g, gi, arr) =>
-                  g.itens.length === 1 ? (
-                    <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
-                  ) : (
-                    <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
-                  )
-                )}
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                {agruparLancamentos(porMes["sem-data"]).map((g) => (
+                  <LinhaCaixa key={g.chave} grupo={g} />
+                ))}
               </div>
             </div>
           )}
-        </>
-      )}
 
       {modal && (
         <LancamentoModal
@@ -5943,6 +6016,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       )}
         </>
       )}
+
 
       {/* barra de desfazer — acima da barra de navegação, some sozinha em 15s. Vai por
           portal no body porque tem ancestral com transform (as animações de entrada dos
@@ -8396,6 +8470,32 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
         }
         .mbr-cresce { flex: 1 1 auto; display: flex; flex-direction: column; }
+
+        /* as duas colunas de Futuros: uma embaixo da outra no celular */
+        .mbr-futuros-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: var(--rd-s5);
+          align-items: stretch;
+        }
+        @media (min-width: 900px) {
+          .mbr-futuros-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        /* os sinais "−" e "=" da faixa de Futuros só fazem sentido com os três números
+           na mesma linha; empilhados no celular eles viram lixo visual */
+        .mbr-oper { display: none; }
+        @media (min-width: 760px) { .mbr-oper { display: inline; } }
+
+        /* faixa "entrou / saiu / saldo" do Caixa: empilha no celular, três colunas
+           divididas por um fio a partir do tablet */
+        .mbr-caixa-resumo { display: grid; grid-template-columns: minmax(0, 1fr); }
+        .mbr-caixa-resumo > div { padding: 14px 18px; border-top: 1px solid var(--rd-border); }
+        .mbr-caixa-resumo > div:first-child { border-top: none; }
+        @media (min-width: 760px) {
+          .mbr-caixa-resumo { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .mbr-caixa-resumo > div { border-top: none; }
+          .mbr-caixa-resumo > div + div { border-left: 1px solid var(--rd-border); }
+        }
         .mbr-rodape-baixo { margin-top: auto; padding-top: var(--rd-s4); }
 
         /* faixa de números da ficha (mensalidade, vencimento, ...): 2 por linha no
