@@ -53,6 +53,7 @@ import {
   Info,
   Landmark,
   Timer,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -614,6 +615,27 @@ const monthLabel = (key) => {
   return `${names[Number(m) - 1]}/${y.slice(2)}`;
 };
 
+// "08/09/26" — data curta pro extrato da moto, onde a coluna é estreita
+const formatDateCurto = (d) => {
+  if (!d) return "—";
+  const [y, m, day] = d.split("-");
+  return `${day}/${m}/${(y || "").slice(2)}`;
+};
+
+// "Setembro" — mês por extenso, pro selo de "mês pago" da ficha
+const mesPorExtenso = (key) => {
+  const nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+  return nomes[Number((key || "").split("-")[1]) - 1] || "";
+};
+
+// quantos meses cheios se passaram desde uma data (usado em "alugada há", "cliente há")
+const mesesDesdeISO = (dataISO) => {
+  if (!dataISO) return null;
+  const d = new Date(`${dataISO}T00:00:00`);
+  const hoje = new Date();
+  return Math.max(0, (hoje.getFullYear() - d.getFullYear()) * 12 + (hoje.getMonth() - d.getMonth()));
+};
+
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
 // quando alguém "adiciona à tela inicial", o app abre sem barra de navegador e sem botão
@@ -1166,60 +1188,6 @@ const contratoAnexosOf = (contrato) => anexosDe(contrato?.anexos, contrato?.cont
 const notaFiscalAnexosOf = (moto) => anexosDe(moto?.notaFiscalAnexos, moto?.notaFiscalLink, moto?.notaFiscalArquivo);
 const notaFiscalFabricaAnexosOf = (moto) => anexosDe(moto?.notaFiscalFabricaAnexos, null, null);
 
-// botão único "Contrato" — se tiver só 1 anexo, abre direto; se tiver mais (várias
-// páginas/fotos do mesmo contrato), abre uma listinha pra escolher qual página ver
-function ContratoAnexosButton({ anexos, label = "Contrato", tituloPreview, onAbrir }) {
-  const [aberto, setAberto] = useState(false);
-  if (!anexos || anexos.length === 0) return null;
-
-  if (anexos.length === 1) {
-    return (
-      <button
-        onClick={() => onAbrir(anexos[0].link, tituloPreview)}
-        className="inline-flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 mbr-hover-grow"
-        style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-      >
-        <FileText size={13} /> {label}
-      </button>
-    );
-  }
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setAberto((v) => !v)}
-        className="inline-flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 mbr-hover-grow"
-        style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-      >
-        <FileText size={13} /> {label} ({anexos.length})
-      </button>
-      {aberto && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setAberto(false)} />
-          <div
-            className="absolute z-20 mt-1 left-0 rounded-xl overflow-hidden flex flex-col mbr-fade-in"
-            style={{ background: theme.panel, border: `1px solid ${theme.cardBorder}`, minWidth: 150, boxShadow: "0 6px 20px rgba(0,0,0,0.4)" }}
-          >
-            {anexos.map((a, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  onAbrir(a.link, `${tituloPreview} (${i + 1}/${anexos.length})`);
-                  setAberto(false);
-                }}
-                className="flex items-center gap-2 px-3 py-2 text-xs text-left mbr-hover-grow"
-                style={{ color: theme.text, borderBottom: i < anexos.length - 1 ? `1px solid ${theme.divider}` : "none" }}
-              >
-                <FileText size={12} /> Página {i + 1}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 // mostra de onde vem um valor passando o mouse por cima (computador) ou tocando nele
 // (celular, já que touch não tem hover de verdade) — usado só nos "Próximos 7 dias".
 // O popover vai num portal pro <body> e usa position:fixed calculado a partir do
@@ -1631,7 +1599,388 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
   );
 }
 
-function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
+// tudo que um cliente já pagou: as entradas do caixa das motos que ele teve, cada uma
+// só dentro do período do contrato dele naquela moto (senão o pagamento do cliente
+// seguinte entraria na conta do anterior)
+function pagamentosDoCliente(cliente, motos, lancamentos) {
+  if (!cliente) return [];
+  const periodos = [];
+  (motos || []).forEach((m) => {
+    if (m.contratoAtual?.clienteId === cliente.id) periodos.push({ moto: m, ini: m.contratoAtual.dataInicio, fim: null });
+    (m.historicoContratos || []).forEach((h) => {
+      if (h.clienteId === cliente.id) periodos.push({ moto: m, ini: h.dataInicio, fim: h.encerradoEm });
+    });
+  });
+  const porId = new Map();
+  periodos.forEach(({ moto, ini, fim }) => {
+    pagamentosDaMoto(moto, lancamentos).forEach((p) => {
+      if (ini && p.data < ini) return;
+      if (fim && p.data > fim) return;
+      porId.set(p.id, { ...p, placa: moto.placa });
+    });
+  });
+  return [...porId.values()].sort((a, b) => (a.data < b.data ? 1 : -1));
+}
+
+// contratos que o cliente teve em qualquer moto (o atual fica de fora)
+function contratosAnterioresDoCliente(cliente, motos) {
+  const lista = [];
+  (motos || []).forEach((m) => {
+    (m.historicoContratos || []).forEach((h) => {
+      if (h.clienteId === cliente?.id) lista.push({ ...h, placa: m.placa });
+    });
+  });
+  return lista.sort((a, b) => (a.encerradoEm > b.encerradoEm ? -1 : 1));
+}
+
+/* ===========================================================
+   FICHA DO CLIENTE — tela inteira, mesma cara da ficha da moto
+=========================================================== */
+function ClienteDetalhe({
+  cliente,
+  moto,
+  motos,
+  lancamentos,
+  onVoltar,
+  onEditarCliente,
+  onExcluirCliente,
+  onEditarContrato,
+  onVincularMoto,
+  onNovoPagamento,
+  onPreview,
+}) {
+  const [filtro, setFiltro] = useState("tudo");
+  const [menuAberto, setMenuAberto] = useState(false);
+
+  const pagamentos = pagamentosDoCliente(cliente, motos, lancamentos);
+  const recebido = pagamentos.reduce((s, p) => s + Number(p.valor || 0), 0);
+  const anteriores = contratosAnterioresDoCliente(cliente, motos);
+
+  const mesAtualKey = todayISO().slice(0, 7);
+  const pagamentosDaMotoAtual = moto ? pagamentosDaMoto(moto, lancamentos) : [];
+  const cobraEsteMes = moto?.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+  const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentosDaMotoAtual, mesAtualKey);
+  const vencido = !!moto && isContratoVencido(moto.contratoAtual, pagamentosDaMotoAtual);
+  const diaVenc = diaVencimentoDoContrato(moto?.contratoAtual);
+  const venc = proximoVencimento(moto?.contratoAtual);
+  const mensalidade = Number(moto?.contratoAtual?.valorMensal || 0);
+
+  // cliente desde: a data de início mais antiga entre todos os contratos dele
+  const clienteDesde = [
+    ...(moto?.contratoAtual?.dataInicio ? [moto.contratoAtual.dataInicio] : []),
+    ...anteriores.map((h) => h.dataInicio).filter(Boolean),
+  ].sort()[0];
+  const mesesDeCasa = mesesDesdeISO(clienteDesde);
+
+  const anexos = contratoAnexosOf(moto?.contratoAtual);
+
+  const extrato = [
+    ...pagamentos.map((p) => ({
+      id: p.id, data: p.data, tipo: "pagamento", sinal: 1, valor: Number(p.valor || 0),
+      // a categoria já costuma trazer a placa ("Mensalidade URB5I50") — só acrescenta
+      // a placa quando ela não está lá, pra não repetir
+      nome: `${p.categoria || "Pagamento"}${
+        p.placa && !`${p.categoria || ""}`.toUpperCase().includes(placaLimpa(p.placa)) ? ` · ${formatPlaca(p.placa)}` : ""
+      }`,
+    })),
+    ...(moto?.contratoAtual?.dataInicio
+      ? [{
+          id: "contrato-atual", data: moto.contratoAtual.dataInicio, tipo: "contrato",
+          nome: `Começou com a ${formatPlaca(moto.placa)} · contrato nº ${moto.contratoAtual.numeroContrato || 1}`,
+          texto: `${formatCurrency(mensalidade)}/mês`,
+        }]
+      : []),
+    ...anteriores.flatMap((h, i) => {
+      const linhas = [];
+      if (h.dataInicio) linhas.push({ id: `ha-ini-${i}`, data: h.dataInicio, tipo: "contrato", nome: `Começou com a ${formatPlaca(h.placa)} · contrato nº ${h.numeroContrato || i + 1}`, texto: `${formatCurrency(h.valorMensal)}/mês` });
+      if (h.encerradoEm) linhas.push({ id: `ha-fim-${i}`, data: h.encerradoEm, tipo: "contrato", nome: `Devolveu a ${formatPlaca(h.placa)}`, texto: "contrato encerrado" });
+      return linhas;
+    }),
+  ].sort((a, b) => (a.data < b.data ? 1 : -1));
+
+  const filtros = [
+    { id: "tudo", label: "Tudo" },
+    { id: "pagamento", label: "Pagamentos" },
+    { id: "contrato", label: "Contratos" },
+  ];
+  const extratoFiltrado = filtro === "tudo" ? extrato : extrato.filter((i) => i.tipo === filtro);
+  const somaDoFiltro = extratoFiltrado.reduce((s, i) => s + (i.sinal || 0) * Number(i.valor || 0), 0);
+
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
+      {/* BARRA DE CIMA */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+        <button onClick={onVoltar} className="flex items-center mbr-hover-grow" style={{ gap: 5, fontSize: 13, fontWeight: 600, color: "var(--rd-text-dim)" }}>
+          <ChevronLeft size={15} strokeWidth={2.75} /> Clientes
+        </button>
+        <span style={{ width: 1, height: 20, background: "var(--rd-border)" }} />
+        <span className="truncate" style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)", minWidth: 0 }}>
+          {cliente.nome || "Sem nome"}
+        </span>
+        <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>{[cliente.cidade, cliente.estado].filter(Boolean).join("/")}</span>
+        <span
+          className="flex items-center"
+          style={{
+            gap: 6, fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 10px", flex: "none",
+            color: moto ? "var(--rd-brand-light)" : "var(--rd-attention)",
+            background: moto ? "var(--rd-brand)" : "var(--rd-attention-bg)" }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: "currentColor" }} />
+          {moto ? `Com a ${formatPlaca(moto.placa)}` : "Sem moto"}
+        </span>
+
+        <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+          {moto && permissoes.podeEditar && (
+            <button
+              onClick={onNovoPagamento}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}
+            >
+              <Plus size={14} strokeWidth={3} /> Lançar pagamento
+            </button>
+          )}
+          {permissoes.podeEditar && (
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setMenuAberto((v) => !v)}
+                aria-label="Mais ações"
+                className="flex items-center justify-center"
+                style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+              >
+                <MoreHorizontal size={16} strokeWidth={2.5} />
+              </button>
+              {menuAberto && (
+                <>
+                  <div className="fixed inset-0" style={{ zIndex: 30 }} onClick={() => setMenuAberto(false)} />
+                  <div
+                    className="flex flex-col"
+                    style={{ position: "absolute", top: 40, right: 0, zIndex: 31, minWidth: 180, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: 6, boxShadow: "0 12px 30px rgba(0,0,0,0.4)" }}
+                  >
+                    <button
+                      onClick={() => { setMenuAberto(false); onEditarCliente(); }}
+                      className="flex items-center text-left"
+                      style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-text)" }}
+                    >
+                      <Pencil size={13} /> Editar cliente
+                    </button>
+                    {!moto && (
+                      <button
+                        onClick={() => { setMenuAberto(false); onExcluirCliente(); }}
+                        className="flex items-center text-left"
+                        style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-negative)" }}
+                      >
+                        <Trash2 size={13} /> Excluir cliente
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mbr-detalhe-grid">
+        {/* ---------- ESQUERDA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+          <CartaoDetalhe>
+            {moto ? (
+              <>
+                <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                  <MotoPlate placa={moto.placa} />
+                  <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                    <span className="truncate" style={{ fontSize: 14, fontWeight: 700, color: "var(--rd-text)" }}>
+                      {moto.modelo || "Moto"}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                      contrato nº {moto.contratoAtual.numeroContrato || 1}
+                      {moto.contratoAtual.dataInicio && ` · desde ${formatDate(moto.contratoAtual.dataInicio)}`}
+                      {moto.contratoAtual.dataTermino && ` · vence ${formatDate(moto.contratoAtual.dataTermino)}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+                    <span
+                      className="flex items-center"
+                      style={{
+                        gap: 6, fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "5px 12px", whiteSpace: "nowrap",
+                        color: pagoEsteMes ? "var(--rd-positive)" : vencido ? "var(--rd-negative)" : "var(--rd-attention)",
+                        background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)" }}
+                    >
+                      {pagoEsteMes ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                      {pagoEsteMes
+                        ? `${mesPorExtenso(mesAtualKey)} pago`
+                        : vencido
+                        ? `Atrasado${diaVenc ? ` — venceu dia ${diaVenc}` : ""}`
+                        : `${mesPorExtenso(mesAtualKey)} em aberto`}
+                    </span>
+                    {permissoes.podeEditar && (
+                      <button
+                        onClick={onEditarContrato}
+                        aria-label="Editar contrato"
+                        title="Editar contrato"
+                        className="flex items-center justify-center"
+                        style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mbr-ficha-stats" style={{ marginTop: "var(--rd-s4)" }}>
+                  <BlocoNumero rotulo="Mensalidade" valor={formatCurrency(mensalidade)} cor="var(--rd-attention-text)" />
+                  <BlocoNumero
+                    rotulo="Vencimento"
+                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : "—"}
+                    detalhe={venc ? (venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`) : null}
+                    cor={vencido ? "var(--rd-negative)" : undefined}
+                  />
+                  <BlocoNumero
+                    rotulo="Cliente há"
+                    valor={`${mesesDeCasa ?? 0} ${mesesDeCasa === 1 ? "mês" : "meses"}`}
+                    detalhe={clienteDesde ? `desde ${formatDate(clienteDesde)}` : null}
+                  />
+                  <BlocoNumero rotulo="Já pagou" valor={formatCurrency(recebido)} detalhe={`${pagamentos.length}x`} cor="var(--rd-positive)" />
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--rd-attention-text)" }}>Sem moto no momento</span>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                    {anteriores.length > 0 ? `já alugou ${anteriores.length} vez${anteriores.length === 1 ? "" : "es"}` : "esse cliente ainda não alugou nenhuma moto"}
+                  </span>
+                </div>
+                {permissoes.podeEditar && (
+                  <button
+                    onClick={onVincularMoto}
+                    className="flex items-center"
+                    style={{ gap: 7, marginLeft: "auto", background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}
+                  >
+                    <Plus size={14} strokeWidth={3} /> Vincular a uma moto
+                  </button>
+                )}
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe
+            titulo="Extrato do cliente"
+            acao={
+              <div className="mbr-filtros" style={{ minWidth: 0 }}>
+                {filtros.map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => setFiltro(f.id)}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: filtro === f.id ? 700 : 600,
+                      background: filtro === f.id ? "var(--rd-brand)" : "transparent",
+                      color: filtro === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            }
+          >
+            {extratoFiltrado.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>Nada lançado pra esse cliente ainda.</div>
+            ) : (
+              extratoFiltrado.map((item) => <LinhaExtrato key={item.id} item={item} />)
+            )}
+            <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                {extratoFiltrado.length} lançamento{extratoFiltrado.length === 1 ? "" : "s"}
+              </span>
+              <span className="flex items-center" style={{ gap: 8 }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Total</span>
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rd-positive)" }}>{formatCurrency(somaDoFiltro)}</span>
+              </span>
+            </div>
+          </CartaoDetalhe>
+        </div>
+
+        {/* ---------- DIREITA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+          <CartaoDetalhe titulo="O que esse cliente rendeu">
+            <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
+              <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-positive)" }}>{formatCurrency(recebido)}</span>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>desde o primeiro contrato</span>
+            </div>
+            <div className="flex flex-col" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+              <LinhaLegendaValor cor="var(--rd-positive)" rotulo="Pagamentos lançados" valor={String(pagamentos.length)} />
+              <LinhaLegendaValor
+                cor="var(--rd-brand-light)"
+                rotulo="Média por mês de contrato"
+                valor={formatCurrency(mesesDeCasa ? recebido / Math.max(1, mesesDeCasa) : recebido)}
+              />
+              <LinhaLegendaValor
+                cor="var(--rd-text-dim)"
+                rotulo="Último pagamento"
+                valor={pagamentos[0] ? formatDate(pagamentos[0].data) : "—"}
+              />
+            </div>
+          </CartaoDetalhe>
+
+          <CartaoDetalhe titulo="Motos anteriores">
+            {anteriores.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                {moto ? `Nenhuma — a ${formatPlaca(moto.placa)} é a primeira moto desse cliente.` : "Esse cliente ainda não teve nenhuma moto."}
+              </div>
+            ) : (
+              anteriores.map((h, i) => (
+                <div key={`${h.placa}-${i}`} className="flex items-center" style={{ gap: 10, padding: "9px 0", borderTop: i === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
+                  <MotoPlate placa={h.placa} />
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)", minWidth: 0 }} className="truncate">
+                    {h.dataInicio && formatDate(h.dataInicio)}
+                    {h.encerradoEm && ` até ${formatDate(h.encerradoEm)}`}
+                  </span>
+                  <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "var(--rd-text-muted)", whiteSpace: "nowrap" }}>
+                    {formatCurrency(h.valorMensal)}/mês
+                  </span>
+                </div>
+              ))
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe titulo="Ficha e contato">
+            <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
+              <CampoFicha rotulo="CPF/CNPJ" valor={cliente.cpfCnpj || "—"} />
+              <CampoFicha rotulo="Telefone" valor={cliente.telefone || "—"} />
+              <CampoFicha rotulo="E-mail" valor={cliente.email || "—"} />
+              <CampoFicha rotulo="CEP" valor={cliente.cep || "—"} />
+            </div>
+            <div style={{ marginTop: "var(--rd-s3)" }}>
+              <CampoFicha rotulo="Endereço" valor={enderecoCompleto(cliente) || "—"} />
+            </div>
+            {cliente.observacoes && (
+              <div style={{ marginTop: "var(--rd-s3)", fontSize: 12, color: "var(--rd-text-muted)" }}>{cliente.observacoes}</div>
+            )}
+            {anexos.length > 0 && (
+              <div className="flex items-center flex-wrap" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+                {anexos.map((a, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onPreview({ url: a.link || a, title: `Contrato — ${formatPlaca(moto.placa)}` })}
+                    className="flex items-center mbr-hover-grow"
+                    style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
+                  >
+                    <FileText size={12} /> {anexos.length > 1 ? `Contrato ${i + 1}` : "Contrato"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </CartaoDetalhe>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientesView({ clientes, persistClientes, motos, persistMotos, lancamentos, persistLancamentos }) {
   const [busca, setBusca] = useState("");
   const [modal, setModal] = useState(null);
   const [expandido, setExpandido] = useState(null);
@@ -1664,14 +2013,58 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
     setModal(null);
   };
 
+  // "Lançar pagamento" na ficha do cliente: mesma entrada do Caixa, já com a moto dele
+  const registrarPagamentoDoCliente = async (moto) => {
+    const valor = Number(moto?.contratoAtual?.valorMensal) || 0;
+    if (!moto || !window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)} hoje?`)) return;
+    await persistLancamentos([
+      ...(lancamentos || []),
+      {
+        id: uid(),
+        data: todayISO(),
+        tipo: "entrada",
+        natureza: "Operacional",
+        categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+        valor,
+        descricao: "",
+        forma: "",
+        motoId: moto.id,
+        parcelas: 1,
+      },
+    ]);
+  };
+
   const filtrados = clientes.filter((c) => {
     const q = busca.toLowerCase();
     return !q || c.nome?.toLowerCase().includes(q) || c.cpfCnpj?.toLowerCase().includes(q);
   });
   const semMotoAgora = clientes.filter((c) => !motos.some((m) => m.contratoAtual?.clienteId === c.id)).length;
 
+  // igual à Frota: clicar num cliente troca a lista pela ficha dele em tela inteira
+  const clienteAberto = clientes.find((c) => c.id === expandido) || null;
+  const motoDoAberto = clienteAberto ? motos.find((m) => m.contratoAtual?.clienteId === clienteAberto.id) : null;
+
   return (
     <div className="flex flex-col" style={{ gap: "var(--rd-gap-secao)" }}>
+      {clienteAberto ? (
+        <ClienteDetalhe
+          cliente={clienteAberto}
+          moto={motoDoAberto}
+          motos={motos}
+          lancamentos={lancamentos}
+          onVoltar={() => setExpandido(null)}
+          onEditarCliente={() => setModal({ mode: "editar", cliente: clienteAberto })}
+          onExcluirCliente={async () => {
+            await excluir(clienteAberto.id);
+            setExpandido(null);
+          }}
+          onEditarContrato={() => setModal({ type: "contrato", moto: motoDoAberto })}
+          onVincularMoto={() => setModal({ mode: "vincular", cliente: clienteAberto })}
+          onNovoPagamento={() => registrarPagamentoDoCliente(motoDoAberto)}
+          onPreview={setPreview}
+        />
+      ) : (
+      <>
       <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
         <div className="flex flex-col" style={{ gap: 3 }}>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)", fontFamily: "var(--rd-font)" }}>Clientes</h1>
@@ -1726,12 +2119,11 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
           <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
             {filtrados.map((c, iLinha) => {
           const motoVinculada = motos.find((m) => m.contratoAtual?.clienteId === c.id);
-          const aberto = expandido === c.id;
           return (
             <div key={c.id} style={{ borderTop: iLinha === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
               <button
                 className="w-full text-left mbr-desktop-grid mbr-tab-row mbr-grid-clientes"
-                onClick={() => setExpandido(aberto ? null : c.id)}
+                onClick={() => setExpandido(c.id)}
               >
                 <div className="flex flex-col min-w-0" style={{ gap: 4 }}>
                   <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
@@ -1764,13 +2156,13 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
                   <span style={{ fontSize: 12, fontWeight: 600, color: "var(--rd-attention-text)" }}>Sem moto no momento</span>
                 )}
                 <span style={{ fontSize: 12.5, fontWeight: 700, color: motoVinculada ? "var(--rd-brand-light)" : "var(--rd-attention)", justifySelf: "end" }}>
-                  {aberto ? "Fechar" : motoVinculada ? "Abrir" : "Vincular"}
+                  {motoVinculada ? "Abrir" : "Vincular"}
                 </span>
               </button>
 
               <button
                 className="w-full mbr-mobile-only flex items-center justify-between text-left"
-                onClick={() => setExpandido(aberto ? null : c.id)}
+                onClick={() => setExpandido(c.id)}
                 style={{ gap: 12, padding: "14px 16px" }}
               >
                 <div className="flex items-center min-w-0" style={{ gap: 12 }}>
@@ -1785,127 +2177,18 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
                   </div>
                 </div>
                 <span style={{ fontSize: 12, fontWeight: 700, color: motoVinculada ? "var(--rd-brand-light)" : "var(--rd-attention)", flex: "none" }}>
-                  {aberto ? "Fechar" : motoVinculada ? "Abrir" : "Vincular"}
+                  {motoVinculada ? "Abrir" : "Vincular"}
                 </span>
               </button>
 
-              <Collapse open={aberto}>
-                <div
-                  className="text-sm"
-                  style={{
-                    fontFamily: BODY_FONT,
-                    // mesma calha lateral da linha fechada, pra ficha aberta e linha
-                    // fechada compartilharem a mesma margem em vez de cada uma ter a sua
-                    padding: "0 var(--rd-pad-row-x) var(--rd-s5)",
-                    borderTop: "1px solid var(--rd-border-soft)",
-                    paddingTop: "var(--rd-s5)" }}
-                >
-                  {/* sem repetir o nome do cliente aqui: ele já está na linha de cima.
-                      As ações moram no alto da coluna da direita, sem gastar uma linha só
-                      pra elas */}
-                  <div className="mbr-ficha-grid">
-                    <div className="mbr-ficha-col">
-                      {motoVinculada ? (
-                        <div>
-                          <div style={RD_LABEL} className="mb-2">Contrato ativo</div>
-                          {/* mesma faixa de fio verde da ficha da moto, em vez do quadrado
-                              escuro que fazia caixa dentro de caixa */}
-                          <div style={{ borderLeft: "2px solid var(--rd-brand)", paddingLeft: 12 }}>
-                            <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
-                              <MotoPlate placa={motoVinculada.placa} />
-                              <span style={{ color: theme.amber, fontWeight: 700, fontSize: 15 }}>
-                                {formatCurrency(motoVinculada.contratoAtual.valorMensal)}/mês
-                              </span>
-                            </div>
-                            <div style={{ color: theme.textFaint, fontSize: 11.5, marginTop: 3 }}>
-                              Contrato nº {motoVinculada.contratoAtual.numeroContrato}
-                              {diaVencimentoDoContrato(motoVinculada.contratoAtual) && ` · paga todo dia ${diaVencimentoDoContrato(motoVinculada.contratoAtual)}`}
-                              {motoVinculada.contratoAtual.dataTermino && ` · até ${formatDate(motoVinculada.contratoAtual.dataTermino)}`}
-                            </div>
-                            <div className="flex items-center gap-3 mt-2 flex-wrap">
-                              <ContratoAnexosButton
-                                anexos={contratoAnexosOf(motoVinculada.contratoAtual)}
-                                tituloPreview={`Contrato — ${formatPlaca(motoVinculada.placa)}`}
-                                onAbrir={(url, title) => setPreview({ url, title })}
-                              />
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={() => setModal({ type: "contrato", moto: motoVinculada })}
-                                  className="inline-flex items-center gap-1 text-xs mbr-hover-grow"
-                                  style={{ color: theme.text }}
-                                >
-                                  <Pencil size={12} /> Editar contrato
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        permissoes.podeEditar && (
-                          <div>
-                            <button
-                              onClick={() => setModal({ mode: "vincular", cliente: c })}
-                              className="text-xs font-semibold rounded-xl px-3"
-                              style={{ background: theme.mint, color: theme.mintText, minHeight: 44 }}
-                            >
-                              Vincular a uma moto disponível
-                            </button>
-                          </div>
-                        )
-                      )}
-                    </div>
-
-                    <div className="mbr-ficha-col">
-                      <div>
-                        <div className="flex items-center justify-between flex-wrap mb-2" style={{ gap: 10 }}>
-                          <span style={RD_LABEL}>Contato</span>
-                          {permissoes.podeEditar && (
-                            <div className="flex items-center" style={{ gap: 14 }}>
-                              <button
-                                onClick={() => setModal({ mode: "editar", cliente: c })}
-                                className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
-                                style={{ color: theme.outlineText }}
-                              >
-                                <Pencil size={12} /> Editar cliente
-                              </button>
-                              {!motoVinculada && (
-                                <button
-                                  onClick={() => excluir(c.id)}
-                                  className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
-                                  style={{ color: theme.coral }}
-                                >
-                                  <Trash2 size={12} /> Excluir
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-col gap-1.5" style={{ color: theme.textMuted }}>
-                          {c.cpfCnpj && <span>CPF/CNPJ: {c.cpfCnpj}</span>}
-                          {c.telefone && (
-                            <span className="flex items-center gap-1">
-                              <Phone size={12} /> {c.telefone}
-                            </span>
-                          )}
-                          {c.email && (
-                            <span className="flex items-center gap-1">
-                              <Mail size={12} /> {c.email}
-                            </span>
-                          )}
-                          <span className="flex items-center gap-1">
-                            <MapPin size={12} /> {enderecoCompleto(c)} {c.cep ? `— CEP ${c.cep}` : ""}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Collapse>
             </div>
           );
             })}
           </div>
         </>
+      )}
+
+      </>
       )}
 
       {(modal?.mode === "novo" || modal?.mode === "editar") && (
@@ -2401,25 +2684,6 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
   );
 }
 
-function MotoTrackingBlock({ link, placa }) {
-  const [aberto, setAberto] = useState(false);
-  return (
-    <div className="mb-3">
-      <button
-        type="button"
-        onClick={() => setAberto((v) => !v)}
-        className="flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3"
-        style={{ background: hexToRgba(theme.mint, 0.16), color: theme.mint, minHeight: 44 }}
-      >
-        <MapPin size={13} /> {aberto ? "Ocultar localização" : "Ver localização em tempo real"}
-      </button>
-      <Collapse open={aberto}>
-        <div className="mt-2">{aberto && <TrackingMap link={link} filterPlaca={placa} height={280} />}</div>
-      </Collapse>
-    </div>
-  );
-}
-
 function MotoFormModal({ moto, onClose, onSave, title }) {
   const [form, setForm] = useState({
     ...emptyMoto(),
@@ -2903,10 +3167,585 @@ function ConsultaPlacaModal({ onClose }) {
   );
 }
 
+/* ===========================================================
+   FICHA DA MOTO — tela inteira, no lugar da lista da Frota
+   Abre quando a pessoa clica numa moto: em cima uma barra com a placa e as
+   ações, embaixo duas colunas (extrato de um lado, resultado/histórico/ficha
+   do outro). Substituiu a ficha que abria por dentro da linha da tabela.
+=========================================================== */
+const CORES_EXTRATO = {
+  pagamento: "var(--rd-positive)",
+  manutencao: "var(--rd-attention)",
+  custo: "var(--rd-negative)",
+  contrato: "var(--rd-text-dim)",
+};
+const ROTULO_EXTRATO = { pagamento: "Pagamento", manutencao: "Manutenção", custo: "Custo", contrato: "Contrato" };
+
+function CartaoDetalhe({ titulo, acao, children, padding }) {
+  return (
+    <div
+      style={{
+        background: "var(--rd-surface)",
+        border: "1px solid var(--rd-border)",
+        borderRadius: 16,
+        padding: padding || "var(--rd-s5)" }}
+    >
+      {titulo && (
+        <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s4)" }}>
+          <span style={RD_LABEL}>{titulo}</span>
+          {acao}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+function BlocoNumero({ rotulo, valor, detalhe, cor }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 5 }}>
+        {rotulo}
+      </div>
+      <div className="flex items-baseline flex-wrap" style={{ gap: 6 }}>
+        <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em", color: cor || "var(--rd-text)" }}>{valor}</span>
+        {detalhe && <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{detalhe}</span>}
+      </div>
+    </div>
+  );
+}
+
+function LinhaExtrato({ item, onEditar, onExcluir }) {
+  return (
+    <div className="flex items-center" style={{ gap: 10, padding: "10px 0", borderTop: "1px solid var(--rd-row-border)" }}>
+      <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)", flex: "none", width: 66, fontFamily: "ui-monospace, monospace" }}>
+        {formatDateCurto(item.data)}
+      </span>
+      <span style={{ width: 7, height: 7, borderRadius: 999, flex: "none", background: CORES_EXTRATO[item.tipo] }} />
+      <span className="truncate" style={{ fontSize: 13, color: "var(--rd-text)", minWidth: 0 }}>{item.nome}</span>
+      <span
+        style={{
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: CORES_EXTRATO[item.tipo],
+          border: "1px solid var(--rd-border)",
+          borderRadius: 999,
+          padding: "2px 7px",
+          whiteSpace: "nowrap",
+          flex: "none" }}
+      >
+        {ROTULO_EXTRATO[item.tipo]}
+      </span>
+      <span
+        className="mbr-extrato-valor"
+        style={{
+          marginLeft: "auto",
+          fontSize: 13,
+          fontWeight: 700,
+          whiteSpace: "nowrap",
+          color: item.tipo === "pagamento" ? "var(--rd-positive)" : item.tipo === "contrato" ? "var(--rd-text)" : item.tipo === "manutencao" ? "var(--rd-attention)" : "var(--rd-negative)" }}
+      >
+        {item.texto || `${item.sinal > 0 ? "+" : "−"} ${formatCurrency(item.valor)}`}
+      </span>
+      <span className="flex items-center" style={{ gap: 4, flex: "none" }}>
+        {onEditar && (
+          <button onClick={onEditar} title="Editar" className="flex items-center justify-center mbr-hover-grow" style={{ width: 26, height: 26, color: "var(--rd-text-faint)" }}>
+            <Pencil size={13} />
+          </button>
+        )}
+        {onExcluir && (
+          <button onClick={onExcluir} title="Excluir" className="flex items-center justify-center mbr-hover-grow" style={{ width: 26, height: 26, color: "var(--rd-negative)" }}>
+            <Trash2 size={13} />
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+
+// barra de três pedaços: quanto a moto já devolveu contra o que ela custou
+function BarraResultado({ recebido, custos, manutencao }) {
+  const total = Math.max(1, Number(recebido || 0) + Number(custos || 0) + Number(manutencao || 0));
+  const pedaco = (v, cor) => (
+    <span style={{ width: `${(Number(v || 0) / total) * 100}%`, background: cor, display: "block" }} />
+  );
+  return (
+    <div className="flex" style={{ height: 7, borderRadius: 999, overflow: "hidden", background: "var(--rd-surface-2)", marginTop: "var(--rd-s4)" }}>
+      {pedaco(recebido, "var(--rd-positive)")}
+      {pedaco(custos, "var(--rd-negative)")}
+      {pedaco(manutencao, "var(--rd-attention)")}
+    </div>
+  );
+}
+
+function LinhaLegendaValor({ cor, rotulo, valor }) {
+  return (
+    <div className="flex items-center" style={{ gap: 9 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 999, background: cor, flex: "none" }} />
+      <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)", minWidth: 0 }}>{rotulo}</span>
+      <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)", whiteSpace: "nowrap" }}>{valor}</span>
+    </div>
+  );
+}
+
+function CampoFicha({ rotulo, valor }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: "var(--rd-text-faint)", marginBottom: 2 }}>{rotulo}</div>
+      <div className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text)", fontFamily: "ui-monospace, monospace" }}>{valor}</div>
+    </div>
+  );
+}
+
+function MotoDetalhe({
+  moto,
+  cliente,
+  clientes,
+  lancamentos,
+  config,
+  onVoltar,
+  onEditarMoto,
+  onExcluirMoto,
+  onNovoLancamento,
+  onEditarLancamento,
+  onExcluirLancamento,
+  onNovaManutencao,
+  onNovoCusto,
+  onExcluirManutencao,
+  onExcluirCusto,
+  onEditarContrato,
+  onNovoContrato,
+  onEncerrarContrato,
+  onRegistrarPagamento,
+  onPreview,
+  diasParados,
+}) {
+  const [filtro, setFiltro] = useState("tudo");
+  const [menuAberto, setMenuAberto] = useState(false);
+  const [verMapa, setVerMapa] = useState(false);
+
+  const pagamentos = pagamentosDaMoto(moto, lancamentos);
+  const manutencoes = manutencoesDaMoto(moto, lancamentos);
+  const custos = custosDaMoto(moto, lancamentos);
+  const soma = (lista, campo) => lista.reduce((s, i) => s + Number(i[campo] || 0), 0);
+  const recebido = soma(pagamentos, "valor");
+  const gastoManutencao = soma(manutencoes, "valorGasto");
+  const gastoCustos = soma(custos, "valorGasto") + Number(moto.valorCompra || 0);
+  const saldo = recebido - gastoCustos - gastoManutencao;
+
+  const mesAtualKey = todayISO().slice(0, 7);
+  const cobraEsteMes = moto.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+  const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentos, mesAtualKey);
+  const vencido = moto.status === "alugada" && isContratoVencido(moto.contratoAtual, pagamentos);
+  const diaVenc = diaVencimentoDoContrato(moto.contratoAtual);
+  const venc = proximoVencimento(moto.contratoAtual);
+  const mensalidade = Number(moto.contratoAtual?.valorMensal || 0);
+
+  // "se pagar em dia, empata em": quanto falta pra moto devolver o que custou,
+  // dividido pela mensalidade — só faz sentido com contrato ativo
+  const empateEm = (() => {
+    if (saldo >= 0 || mensalidade <= 0) return null;
+    const meses = Math.ceil(-saldo / mensalidade);
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + meses);
+    return monthLabel(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  })();
+
+  const anexosContrato = contratoAnexosOf(moto.contratoAtual);
+  const documentos = [
+    ...anexosContrato.map((a, i) => ({ url: a.link || a, titulo: anexosContrato.length > 1 ? `Contrato ${i + 1}` : "Contrato" })),
+    ...notaFiscalAnexosOf(moto).map((a, i, l) => ({ url: a.link, titulo: l.length > 1 ? `Nota fiscal ${i + 1}` : "Nota fiscal" })),
+    ...notaFiscalFabricaAnexosOf(moto).map((a, i, l) => ({ url: a.link, titulo: l.length > 1 ? `NF de fábrica ${i + 1}` : "NF de fábrica" })),
+    ...(moto.documentoLink ? [{ url: moto.documentoLink, titulo: "Documento" }] : []),
+    ...(moto.certificadoLink ? [{ url: moto.certificadoLink, titulo: "Certificado" }] : []),
+  ].filter((d) => d.url);
+
+  // EXTRATO — pagamentos, manutenções, custos, contratos e a compra numa linha do tempo só
+  const extrato = [
+    ...pagamentos.map((p) => ({
+      id: p.id, data: p.data, tipo: "pagamento", sinal: 1, valor: Number(p.valor || 0),
+      nome: p.categoria || p.descricao || "Pagamento",
+      editar: () => onEditarLancamento(p.id), excluir: () => onExcluirLancamento(p.id),
+    })),
+    ...manutencoes.map((m) => ({
+      id: m.id, data: m.data, tipo: "manutencao", sinal: -1, valor: Number(m.valorGasto || 0), nome: m.descricao,
+      editar: m.doCaixa ? () => onEditarLancamento(m.id) : null, excluir: () => onExcluirManutencao(m.id),
+    })),
+    ...custos.map((c) => ({
+      id: c.id, data: c.data, tipo: "custo", sinal: -1, valor: Number(c.valorGasto || 0), nome: c.descricao,
+      editar: c.doCaixa ? () => onEditarLancamento(c.id) : null, excluir: () => onExcluirCusto(c.id),
+    })),
+    ...(moto.contratoAtual?.dataInicio
+      ? [{
+          id: "contrato-atual", data: moto.contratoAtual.dataInicio, tipo: "contrato",
+          nome: `Início do contrato nº ${moto.contratoAtual.numeroContrato || 1}`,
+          texto: `${formatCurrency(mensalidade)}/mês`, editar: onEditarContrato,
+        }]
+      : []),
+    ...(moto.historicoContratos || []).flatMap((h, i) => {
+      const nomeCliente = (clientes || []).find((c) => c.id === h.clienteId)?.nome || "cliente anterior";
+      const linhas = [];
+      if (h.dataInicio) linhas.push({ id: `h-ini-${i}`, data: h.dataInicio, tipo: "contrato", nome: `Início do contrato nº ${h.numeroContrato || i + 1} · ${nomeCliente}`, texto: `${formatCurrency(h.valorMensal)}/mês` });
+      if (h.encerradoEm) linhas.push({ id: `h-fim-${i}`, data: h.encerradoEm, tipo: "contrato", nome: `Fim do contrato nº ${h.numeroContrato || i + 1} · ${nomeCliente}`, texto: "encerrado" });
+      return linhas;
+    }),
+    ...(moto.dataCompra
+      ? [{ id: "compra", data: moto.dataCompra, tipo: "custo", sinal: -1, valor: Number(moto.valorCompra || 0), nome: "Compra da moto", editar: onEditarMoto }]
+      : []),
+  ].sort((a, b) => (a.data < b.data ? 1 : -1));
+
+  const filtros = [
+    { id: "tudo", label: "Tudo" },
+    { id: "pagamento", label: "Pagamentos" },
+    { id: "manutencao", label: "Manutenções" },
+    { id: "custo", label: "Custos" },
+  ];
+  const extratoFiltrado = filtro === "tudo" ? extrato : extrato.filter((i) => i.tipo === filtro);
+  const saldoDoFiltro = extratoFiltrado.reduce((s, i) => s + (i.sinal || 0) * Number(i.valor || 0), 0);
+
+  const anteriores = [...(moto.historicoContratos || [])].sort((a, b) => (a.encerradoEm > b.encerradoEm ? -1 : 1));
+  const linkRastreio = moto.linkRastreamento || config?.linkRastreioGeral;
+
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
+      {/* BARRA DE CIMA — volta pra lista, identifica a moto e concentra as ações */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+        <button onClick={onVoltar} className="flex items-center mbr-hover-grow" style={{ gap: 5, fontSize: 13, fontWeight: 600, color: "var(--rd-text-dim)" }}>
+          <ChevronLeft size={15} strokeWidth={2.75} /> Frota
+        </button>
+        <span style={{ width: 1, height: 20, background: "var(--rd-border)" }} />
+        <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 19, fontWeight: 700, letterSpacing: "-0.01em", color: "var(--rd-text)" }}>
+          {formatPlaca(moto.placa)}
+        </span>
+        <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-dim)", minWidth: 0 }}>
+          {[moto.modelo, moto.anoModelo, moto.cor].filter(Boolean).join(" · ")}
+        </span>
+        <span
+          className="flex items-center"
+          style={{
+            gap: 6, fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 10px", flex: "none",
+            color: moto.status === "alugada" ? "var(--rd-brand-light)" : "var(--rd-attention)",
+            background: moto.status === "alugada" ? "var(--rd-brand)" : "var(--rd-attention-bg)" }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: "currentColor" }} />
+          {moto.status === "alugada" ? "Alugada" : MOTO_STATUS[moto.status]?.label || "Parada"}
+        </span>
+
+        <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+          {linkRastreio && (
+            <button
+              onClick={() => setVerMapa((v) => !v)}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "8px 15px", fontSize: 12.5, fontWeight: 600 }}
+            >
+              <MapPin size={14} strokeWidth={2.5} /> {verMapa ? "Ocultar mapa" : "Localização"}
+            </button>
+          )}
+          {permissoes.podeEditar && (
+            <button
+              onClick={onNovoLancamento}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}
+            >
+              <Plus size={14} strokeWidth={3} /> Lançar
+            </button>
+          )}
+          {permissoes.podeEditar && (
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setMenuAberto((v) => !v)}
+                aria-label="Mais ações"
+                className="flex items-center justify-center"
+                style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+              >
+                <MoreHorizontal size={16} strokeWidth={2.5} />
+              </button>
+              {menuAberto && (
+                <>
+                  <div className="fixed inset-0" style={{ zIndex: 30 }} onClick={() => setMenuAberto(false)} />
+                  <div
+                    className="flex flex-col"
+                    style={{ position: "absolute", top: 40, right: 0, zIndex: 31, minWidth: 172, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: 6, boxShadow: "0 12px 30px rgba(0,0,0,0.4)" }}
+                  >
+                    <button
+                      onClick={() => { setMenuAberto(false); onEditarMoto(); }}
+                      className="flex items-center text-left"
+                      style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-text)" }}
+                    >
+                      <Pencil size={13} /> Editar moto
+                    </button>
+                    {moto.status !== "alugada" && (
+                      <button
+                        onClick={() => { setMenuAberto(false); onExcluirMoto(); }}
+                        className="flex items-center text-left"
+                        style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-negative)" }}
+                      >
+                        <Trash2 size={13} /> Excluir moto
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {verMapa && linkRastreio && (
+        <CartaoDetalhe padding="var(--rd-s3)">
+          <TrackingMap link={linkRastreio} filterPlaca={moto.placa} height={300} />
+        </CartaoDetalhe>
+      )}
+
+      <div className="mbr-detalhe-grid">
+        {/* ---------- COLUNA DA ESQUERDA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+          <CartaoDetalhe>
+            {moto.contratoAtual ? (
+              <>
+                <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                  <AvatarIniciais username={cliente?.nome} />
+                  <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                    <span className="truncate" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>
+                      {cliente?.nome || "Cliente"}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                      contrato nº {moto.contratoAtual.numeroContrato || 1}
+                      {moto.contratoAtual.dataInicio && ` · desde ${formatDate(moto.contratoAtual.dataInicio)}`}
+                      {moto.contratoAtual.dataTermino && ` · vence ${formatDate(moto.contratoAtual.dataTermino)}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+                    <span
+                      className="flex items-center"
+                      style={{
+                        gap: 6, fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "5px 12px", whiteSpace: "nowrap",
+                        color: pagoEsteMes ? "var(--rd-positive)" : vencido ? "var(--rd-negative)" : "var(--rd-attention)",
+                        background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)" }}
+                    >
+                      {pagoEsteMes ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                      {pagoEsteMes
+                        ? `${mesPorExtenso(mesAtualKey)} pago`
+                        : vencido
+                        ? `Atrasado${diaVenc ? ` — venceu dia ${diaVenc}` : ""}`
+                        : cobraEsteMes
+                        ? `${mesPorExtenso(mesAtualKey)} em aberto`
+                        : `1ª cobrança em ${monthLabel((primeiraCobrancaDoContrato(moto.contratoAtual) || "").slice(0, 7))}`}
+                    </span>
+                    {permissoes.podeEditar && (
+                      <button
+                        onClick={onEditarContrato}
+                        aria-label="Editar contrato"
+                        title="Editar contrato"
+                        className="flex items-center justify-center"
+                        style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!pagoEsteMes && vencido && permissoes.podeEditar && (
+                  <button
+                    onClick={onRegistrarPagamento}
+                    className="flex items-center text-xs font-semibold rounded-xl px-3 py-2"
+                    style={{ gap: 6, marginTop: "var(--rd-s3)", border: "1px solid var(--rd-attention-border)", color: "var(--rd-attention-text)" }}
+                  >
+                    <CheckCircle2 size={13} /> Lançar pagamento recebido
+                  </button>
+                )}
+
+                <div className="mbr-ficha-stats" style={{ marginTop: "var(--rd-s4)" }}>
+                  <BlocoNumero rotulo="Mensalidade" valor={formatCurrency(mensalidade)} cor="var(--rd-attention-text)" />
+                  <BlocoNumero
+                    rotulo="Vencimento"
+                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : "—"}
+                    detalhe={venc ? (venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`) : null}
+                    cor={vencido ? "var(--rd-negative)" : undefined}
+                  />
+                  <BlocoNumero
+                    rotulo="Alugada há"
+                    valor={`${mesesDesdeISO(moto.contratoAtual.dataInicio) ?? 0} ${mesesDesdeISO(moto.contratoAtual.dataInicio) === 1 ? "mês" : "meses"}`}
+                    detalhe={moto.contratoAtual.dataInicio ? `desde ${formatDate(moto.contratoAtual.dataInicio)}` : null}
+                  />
+                  <BlocoNumero rotulo="Documentos" valor={String(documentos.length)} detalhe={documentos.length === 1 ? "arquivo" : "arquivos"} />
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--rd-attention-text)" }}>Sem contrato</span>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                    {diasParados != null ? `parada há ${diasParados} dia${diasParados === 1 ? "" : "s"}` : "essa moto não está alugada"}
+                  </span>
+                </div>
+                {permissoes.podeEditar && (
+                  <button
+                    onClick={onNovoContrato}
+                    className="flex items-center"
+                    style={{ gap: 7, marginLeft: "auto", background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}
+                  >
+                    <Plus size={14} strokeWidth={3} /> Alugar / novo contrato
+                  </button>
+                )}
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe
+            titulo="Extrato da moto"
+            acao={
+              <div className="mbr-filtros" style={{ minWidth: 0 }}>
+                {filtros.map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => setFiltro(f.id)}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: filtro === f.id ? 700 : 600,
+                      background: filtro === f.id ? "var(--rd-brand)" : "transparent",
+                      color: filtro === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            }
+          >
+            {extratoFiltrado.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>Nada lançado aqui ainda.</div>
+            ) : (
+              extratoFiltrado.map((item) => (
+                <LinhaExtrato
+                  key={item.id}
+                  item={item}
+                  onEditar={permissoes.podeEditar ? item.editar : null}
+                  onExcluir={permissoes.podeEditar ? item.excluir : null}
+                />
+              ))
+            )}
+            <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                {extratoFiltrado.length} lançamento{extratoFiltrado.length === 1 ? "" : "s"}
+              </span>
+              <span className="flex items-center" style={{ gap: 8 }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Saldo</span>
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: saldoDoFiltro >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                  {saldoDoFiltro >= 0 ? "+" : "−"} {formatCurrency(Math.abs(saldoDoFiltro))}
+                </span>
+              </span>
+            </div>
+          </CartaoDetalhe>
+        </div>
+
+        {/* ---------- COLUNA DA DIREITA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+          <CartaoDetalhe titulo="Resultado desta moto">
+            <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
+              <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: saldo >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                {saldo >= 0 ? "+" : "−"} {formatCurrency(Math.abs(saldo))}
+              </span>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>desde a compra</span>
+            </div>
+            <BarraResultado recebido={recebido} custos={gastoCustos} manutencao={gastoManutencao} />
+            <div className="flex flex-col" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+              <LinhaLegendaValor cor="var(--rd-positive)" rotulo="Recebido" valor={formatCurrency(recebido)} />
+              <LinhaLegendaValor cor="var(--rd-negative)" rotulo="Compra e custos" valor={formatCurrency(gastoCustos)} />
+              <LinhaLegendaValor cor="var(--rd-attention)" rotulo="Manutenção" valor={formatCurrency(gastoManutencao)} />
+            </div>
+            {empateEm && (
+              <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Se pagar em dia, empata em</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>{empateEm}</span>
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe titulo="Clientes anteriores">
+            {anteriores.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                {cliente ? `Nenhum — ${cliente.nome} é o primeiro cliente dessa moto.` : "Essa moto ainda não teve contrato."}
+              </div>
+            ) : (
+              anteriores.map((h, i) => {
+                const nomeCliente = (clientes || []).find((c) => c.id === h.clienteId)?.nome || "Cliente";
+                return (
+                  <div key={`${h.numeroContrato}-${i}`} className="flex items-center" style={{ gap: 10, padding: "9px 0", borderTop: i === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
+                    <AvatarIniciais username={nomeCliente} />
+                    <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                      <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{nomeCliente}</span>
+                      <span style={{ fontSize: 11, color: "var(--rd-text-faint)" }}>
+                        contrato nº {h.numeroContrato || i + 1}
+                        {h.dataInicio && ` · ${formatDate(h.dataInicio)}`}
+                        {h.encerradoEm && ` até ${formatDate(h.encerradoEm)}`}
+                      </span>
+                    </div>
+                    <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "var(--rd-text-muted)", whiteSpace: "nowrap" }}>
+                      {formatCurrency(h.valorMensal)}/mês
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe titulo="Ficha e documentos">
+            <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
+              <CampoFicha rotulo="Chassi" valor={moto.chassi || "—"} />
+              <CampoFicha rotulo="Renavam" valor={moto.renavam || "—"} />
+              <CampoFicha rotulo="Comprada em" valor={moto.dataCompra ? formatDate(moto.dataCompra) : "—"} />
+              <CampoFicha rotulo="Valor de compra" valor={formatCurrency(moto.valorCompra || 0)} />
+            </div>
+            {documentos.length > 0 && (
+              <div className="flex items-center flex-wrap" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+                {documentos.map((d, i) => (
+                  <button
+                    key={`${d.titulo}-${i}`}
+                    onClick={() => onPreview({ url: d.url, title: `${d.titulo} — ${formatPlaca(moto.placa)}` })}
+                    className="flex items-center mbr-hover-grow"
+                    style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
+                  >
+                    <FileText size={12} /> {d.titulo}
+                  </button>
+                ))}
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          {moto.contratoAtual && permissoes.podeEditar && (
+            <div className="flex items-center" style={{ gap: "var(--rd-s3)" }}>
+              <button
+                onClick={onEditarContrato}
+                className="flex items-center justify-center"
+                style={{ flex: 1, gap: 7, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", color: "var(--rd-text)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700 }}
+              >
+                <Pencil size={13} /> Editar contrato
+              </button>
+              <button
+                onClick={onEncerrarContrato}
+                className="flex items-center justify-center"
+                style={{ flex: 1, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", color: "var(--rd-negative)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700 }}
+              >
+                Encerrar contrato
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MotosView({ motos, persist, clientes, persistClientes, config, lancamentos, persistLancamentos }) {
   const [busca, setBusca] = useState("");
   const [expandido, setExpandido] = useState(null);
-  const [verCadastro, setVerCadastro] = useState(null);
   const [modal, setModal] = useState(null);
   const [preview, setPreview] = useState(null);
 
@@ -3022,8 +3861,24 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
   };
 
   const salvarLancamentoDaMoto = async (lancamento) => {
-    await persistLancamentos((lancamentos || []).map((l) => (l.id === lancamento.id ? { ...l, ...lancamento } : l)));
+    const existe = (lancamentos || []).some((l) => l.id === lancamento.id);
+    await persistLancamentos(
+      existe
+        ? (lancamentos || []).map((l) => (l.id === lancamento.id ? { ...l, ...lancamento } : l))
+        : [...(lancamentos || []), lancamento]
+    );
     setModal(null);
+  };
+
+  // "+ Lançar" na ficha da moto: abre o mesmo formulário do Caixa já com a moto escolhida
+  const novoLancamentoDaMoto = (moto) =>
+    setModal({ type: "lancamento", novo: true, lancamento: { ...emptyLancamento(), motoId: moto.id } });
+
+  const excluirLancamentoDaMoto = async (id) => {
+    const l = (lancamentos || []).find((x) => x.id === id);
+    if (!l) return;
+    if (!window.confirm(`Excluir "${l.categoria || l.descricao || "lançamento"}" de ${formatCurrency(l.valor)} do caixa?`)) return;
+    await persistLancamentos((lancamentos || []).filter((x) => x.id !== id));
   };
 
   const salvarCustoExtra = async (moto, custo) => {
@@ -3136,8 +3991,39 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     { id: "manutencao", label: "Manutenção" },
   ];
 
+  // clicar numa moto troca a lista pela ficha dela em tela inteira (não expande mais
+  // por dentro da linha) — "< Frota" volta pra lista
+  const motoAberta = motos.find((m) => m.id === expandido) || null;
+
   return (
     <div className="flex flex-col" style={{ gap: "var(--rd-gap-secao)" }}>
+      {motoAberta ? (
+        <MotoDetalhe
+          moto={motoAberta}
+          cliente={clientes.find((c) => c.id === motoAberta.contratoAtual?.clienteId)}
+          clientes={clientes}
+          lancamentos={lancamentos}
+          config={config}
+          diasParados={motoAberta.status !== "alugada" ? diasParadaDaMoto(motoAberta) : null}
+          onVoltar={() => setExpandido(null)}
+          onEditarMoto={() => setModal({ type: "moto", mode: "editar", moto: motoAberta })}
+          onExcluirMoto={async () => {
+            await excluirMoto(motoAberta.id);
+            setExpandido(null);
+          }}
+          onNovoLancamento={() => novoLancamentoDaMoto(motoAberta)}
+          onEditarLancamento={abrirLancamentoDaMoto}
+          onExcluirLancamento={excluirLancamentoDaMoto}
+          onExcluirManutencao={(id) => excluirManutencao(motoAberta, id)}
+          onExcluirCusto={(id) => excluirCustoExtra(motoAberta, id)}
+          onEditarContrato={() => setModal({ type: "contrato", mode: "editar", moto: motoAberta })}
+          onNovoContrato={() => setModal({ type: "contrato", moto: motoAberta })}
+          onEncerrarContrato={() => encerrarContrato(motoAberta)}
+          onRegistrarPagamento={() => registrarPagamento(motoAberta)}
+          onPreview={setPreview}
+        />
+      ) : (
+      <>
       {/* linha 1 — só título e ações. Os filtros saíram daqui: com título,
           filtros e dois botões na mesma linha, o topo virava um amontoado */}
       <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
@@ -3246,7 +4132,6 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
           const cobraEsteMes = moto.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
           const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentos, mesAtualKey);
           const cliente = clientes.find((c) => c.id === moto.contratoAtual?.clienteId);
-          const aberto = expandido === moto.id;
           const diaVenc = diaVencimentoDoContrato(moto.contratoAtual);
           const venc = proximoVencimento(moto.contratoAtual);
           const payback = paybackDaMoto(moto);
@@ -3261,7 +4146,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
             >
               <button
                 className="w-full text-left mbr-desktop-grid mbr-tab-row mbr-grid-frota"
-                onClick={() => setExpandido(aberto ? null : moto.id)}
+                onClick={() => setExpandido(moto.id)}
               >
                 <div className="flex flex-col" style={{ gap: 5 }}>
                   <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{formatPlaca(moto.placa)}</span>
@@ -3342,12 +4227,12 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                   </span>
                 </div>
                 <span style={{ fontSize: 12.5, fontWeight: 700, color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)", justifySelf: "end" }}>
-                  {aberto ? "Fechar" : parada ? "Alugar" : "Abrir"}
+                  {parada ? "Alugar" : "Abrir"}
                 </span>
               </button>
 
               {/* cartão — só celular/tablet (<1024px) */}
-              <button className="w-full mbr-mobile-only flex items-center justify-between text-left" onClick={() => setExpandido(aberto ? null : moto.id)} style={{ gap: 12, padding: "14px 16px" }}>
+              <button className="w-full mbr-mobile-only flex items-center justify-between text-left" onClick={() => setExpandido(moto.id)} style={{ gap: 12, padding: "14px 16px" }}>
                 <div className="flex items-center min-w-0" style={{ gap: 12 }}>
                   <div className="flex items-center justify-center flex-shrink-0" style={{ width: 32, height: 32, borderRadius: 9, background: "var(--rd-surface-2)" }}>
                     <Bike size={16} color={vencido ? "var(--rd-negative)" : parada ? "var(--rd-attention)" : "var(--rd-brand-light)"} />
@@ -3360,302 +4245,19 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                 <div className="flex items-center flex-shrink-0" style={{ gap: 8 }}>
                   {vencido && <AlertTriangle size={14} color="var(--rd-negative)" />}
                   <span style={{ fontSize: 12, fontWeight: 700, color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)" }}>
-                    {aberto ? "Fechar" : parada ? "Alugar" : "Abrir"}
+                    {parada ? "Alugar" : "Abrir"}
                   </span>
                 </div>
               </button>
 
-              <Collapse open={aberto}>
-                <div
-                  className="text-sm"
-                  style={{
-                    fontFamily: BODY_FONT,
-                    // mesma calha lateral da linha fechada, pra ficha aberta e linha
-                    // fechada compartilharem a mesma margem em vez de cada uma ter a sua
-                    padding: "0 var(--rd-pad-row-x) var(--rd-s5)",
-                    borderTop: "1px solid var(--rd-border-soft)",
-                    paddingTop: "var(--rd-s5)" }}
-                >
-                  <div className="flex items-baseline flex-wrap mb-4" style={{ gap: 8 }}>
-                    <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: theme.text }}>
-                      {moto.modelo || "Modelo não informado"}
-                    </span>
-                    <span style={{ fontSize: 12, color: theme.textFaint }}>
-                      {[moto.anoModelo, moto.cor].filter(Boolean).join(" · ")}
-                    </span>
-                    {permissoes.podeEditar && (
-                      <div className="flex items-center" style={{ gap: 14, marginLeft: "auto" }}>
-                        <button
-                          onClick={() => setModal({ type: "moto", mode: "editar", moto })}
-                          className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
-                          style={{ color: theme.outlineText }}
-                        >
-                          <Pencil size={12} /> Editar moto
-                        </button>
-                        {moto.status !== "alugada" && (
-                          <button
-                            onClick={() => excluirMoto(moto.id)}
-                            className="flex items-center gap-1 text-xs font-semibold mbr-hover-grow"
-                            style={{ color: theme.coral }}
-                          >
-                            <Trash2 size={12} /> Excluir
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mbr-ficha-grid">
-                  <div className="mbr-ficha-col">
-                  <div>
-                    {moto.contratoAtual ? (
-                      /* sem o bloco escuro por dentro do cartão: um fio na esquerda marca
-                         o contrato sem criar uma "caixa dentro da caixa" */
-                      <div style={{ borderLeft: "2px solid var(--rd-brand)", paddingLeft: 12 }}>
-                        {vencido && (
-                          <div className="mb-2">
-                            <div className="flex items-center gap-1.5" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
-                              <AlertTriangle size={13} /> Pagamento atrasado
-                              {diaVencimentoDoContrato(moto.contratoAtual) && ` — venceu dia ${diaVencimentoDoContrato(moto.contratoAtual)} e não tem pagamento lançado no caixa`}
-                            </div>
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={() => registrarPagamento(moto)}
-                                className="text-xs font-semibold rounded-xl px-3 py-1.5 mt-2 flex items-center gap-1"
-                                style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                              >
-                                <CheckCircle2 size={12} /> Lançar pagamento recebido
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        {/* o contrário do atraso, pra fechar o ciclo: lançou no caixa, a moto
-                            mostra na hora que o mês está quitado */}
-                        {pagoEsteMes && (
-                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.mint, fontSize: 12, fontWeight: 600 }}>
-                            <CheckCircle2 size={13} /> Pagamento deste mês já lançado
-                          </div>
-                        )}
-                        {/* aluguel é pago no fim do período: quem alugou agora só paga no mês
-                            que vem. Sem isso a moto parecia cobrável no mês da assinatura */}
-                        {moto.status === "alugada" && !cobraEsteMes && primeiraCobrancaDoContrato(moto.contratoAtual) && (
-                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.amber, fontSize: 12, fontWeight: 600 }}>
-                            1ª cobrança em {monthLabel(primeiraCobrancaDoContrato(moto.contratoAtual).slice(0, 7))}
-                          </div>
-                        )}
-                        <div className="flex items-baseline justify-between flex-wrap" style={{ gap: 8 }}>
-                          <span style={{ color: theme.text, fontWeight: 700, fontSize: 14 }}>{cliente?.nome || "Cliente"}</span>
-                          <span style={{ color: theme.amber, fontWeight: 700, fontSize: 15 }}>
-                            {formatCurrency(moto.contratoAtual.valorMensal)}/mês
-                          </span>
-                        </div>
-                        <div style={{ color: theme.textFaint, fontSize: 11.5, marginTop: 2 }}>
-                          {moto.contratoAtual.numeroClienteMoto}º cliente · contrato nº {moto.contratoAtual.numeroContrato}
-                          {moto.contratoAtual.dataInicio && ` · alugou em ${formatDate(moto.contratoAtual.dataInicio)}`}
-                          {diaVencimentoDoContrato(moto.contratoAtual) && ` · paga todo dia ${diaVencimentoDoContrato(moto.contratoAtual)}`}
-                          {moto.contratoAtual.dataTermino && ` · até ${formatDate(moto.contratoAtual.dataTermino)}`}
-                        </div>
-                        {contratoAnexosOf(moto.contratoAtual).length > 0 && (
-                          <div className="flex items-center gap-3 mt-1 flex-wrap">
-                            <ContratoAnexosButton
-                              anexos={contratoAnexosOf(moto.contratoAtual)}
-                              tituloPreview={`Contrato — ${formatPlaca(moto.placa)}`}
-                              onAbrir={(url, title) => setPreview({ url, title })}
-                            />
-                          </div>
-                        )}
-                        {permissoes.podeEditar && (
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => setModal({ type: "contrato", mode: "editar", moto })}
-                              className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                              style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                            >
-                              <Pencil size={12} /> Editar contrato
-                            </button>
-                            <button
-                              onClick={() => encerrarContrato(moto)}
-                              className="text-xs font-semibold rounded-xl px-3 py-1.5"
-                              style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                            >
-                              Encerrar contrato
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      permissoes.podeEditar && (
-                        <button
-                          onClick={() => setModal({ type: "contrato", moto })}
-                          className="text-xs font-semibold rounded-xl px-3"
-                          style={{ background: theme.mint, color: theme.mintText, minHeight: 44 }}
-                        >
-                          Alugar / novo contrato
-                        </button>
-                      )
-                    )}
-                  </div>
-
-                  <div>
-                    <MotoTrackingBlock link={moto.linkRastreamento || config?.linkRastreioGeral} placa={moto.placa} />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span style={RD_LABEL}>Pagamentos recebidos</span>
-                    </div>
-                    {pagamentos.length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                        Nenhum pagamento lançado pra essa moto ainda — lance no Caixa escolhendo a moto,
-                        ou pelo botão de pagamento aqui em cima quando estiver atrasado.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex justify-between text-xs mb-1" style={{ color: theme.mint, fontWeight: 700 }}>
-                          <span>Total recebido</span>
-                          <span>{formatCurrency(pagamentos.reduce((s, p) => s + Number(p.valor), 0))}</span>
-                        </div>
-                        {pagamentos.map((p) => (
-                          <div key={p.id} className="flex items-center justify-between text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                            <span style={{ color: theme.text }}>
-                              {formatDate(p.data)} · {p.categoria || "Sem categoria"}
-                            </span>
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(p.valor)}</span>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                  </div>
-
-                  <div className="mbr-ficha-col">
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span style={RD_LABEL}>Manutenções</span>
-                      {permissoes.podeEditar && (
-                        <button
-                          onClick={() => setModal({ type: "manutencao", moto })}
-                          className="flex items-center justify-center mbr-hover-grow"
-                          style={{ color: theme.mint, width: 44, height: 44, marginRight: -10 }}
-                        >
-                          <Plus size={16} />
-                        </button>
-                      )}
-                    </div>
-                    {manutencoesDaMoto(moto, lancamentos).length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhuma registrada.</div>
-                    ) : (
-                      [...manutencoesDaMoto(moto, lancamentos)].reverse().map((mnt) => (
-                        <LinhaGastoDaMoto
-                          key={mnt.id}
-                          item={mnt}
-                          podeEditar={permissoes.podeEditar}
-                          onEditar={() => abrirLancamentoDaMoto(mnt.id)}
-                          onExcluir={() => excluirManutencao(moto, mnt.id)}
-                        />
-                      ))
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span style={RD_LABEL}>Custos</span>
-                      {permissoes.podeEditar && (
-                        <button
-                          onClick={() => setModal({ type: "custoExtra", moto })}
-                          className="flex items-center justify-center mbr-hover-grow"
-                          style={{ color: theme.mint, width: 44, height: 44, marginRight: -10 }}
-                        >
-                          <Plus size={16} />
-                        </button>
-                      )}
-                    </div>
-                    {custosDaMoto(moto, lancamentos).length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhum registrado.</div>
-                    ) : (
-                      [...custosDaMoto(moto, lancamentos)].reverse().map((c) => (
-                        <LinhaGastoDaMoto
-                          key={c.id}
-                          item={c}
-                          podeEditar={permissoes.podeEditar}
-                          onEditar={() => abrirLancamentoDaMoto(c.id)}
-                          onExcluir={() => excluirCustoExtra(moto, c.id)}
-                        />
-                      ))
-                    )}
-                  </div>
-
-
-                  </div>
-                  </div>
-
-                  <div style={{ marginTop: "var(--rd-s4)" }}>
-                    <button
-                      onClick={() => setVerCadastro((v) => (v === moto.id ? null : moto.id))}
-                      className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide"
-                      style={{ color: theme.textFaint, minHeight: 32 }}
-                    >
-                      {verCadastro === moto.id ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                      Dados cadastrais e documentos
-                    </button>
-                    <Collapse open={verCadastro === moto.id}>
-                      <div className="pt-3">
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-3" style={{ color: theme.textMuted }}>
-                          <span>Chassi: {moto.chassi || "—"}</span>
-                          <span>Renavam: {moto.renavam || "—"}</span>
-                          <span>Compra: {formatDate(moto.dataCompra)}</span>
-                          <span>Valor: {formatCurrency(moto.valorCompra)}</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          {notaFiscalAnexosOf(moto).map((a, i, lista) => (
-                            <button
-                              key={`nf-${i}`}
-                              onClick={() => setPreview({ url: a.link, title: `Nota fiscal — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> {lista.length > 1 ? `Nota fiscal ${i + 1}` : "Nota fiscal"}
-                            </button>
-                          ))}
-                          {notaFiscalFabricaAnexosOf(moto).map((a, i, lista) => (
-                            <button
-                              key={`nff-${i}`}
-                              onClick={() => setPreview({ url: a.link, title: `Nota fiscal de fábrica — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> {lista.length > 1 ? `NF de fábrica ${i + 1}` : "NF de fábrica"}
-                            </button>
-                          ))}
-                          {moto.documentoLink && (
-                            <button
-                              onClick={() => setPreview({ url: moto.documentoLink, title: `Documento — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> Documento
-                            </button>
-                          )}
-                          {moto.certificadoLink && (
-                            <button
-                              onClick={() => setPreview({ url: moto.certificadoLink, title: `Certificado de garantia — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> Certificado
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </Collapse>
-                  </div>
-
-                </div>
-              </Collapse>
             </div>
           );
             })}
           </div>
         </>
+      )}
+
+      </>
       )}
 
       {modal?.type === "moto" && (
@@ -3686,14 +4288,18 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
       {modal?.type === "lancamento" && (
         <LancamentoModal
           lancamento={modal.lancamento}
-          editando
+          editando={!modal.novo}
           motos={motos}
           onClose={() => setModal(null)}
           onSave={salvarLancamentoDaMoto}
-          onDelete={async () => {
-            await persistLancamentos((lancamentos || []).filter((l) => l.id !== modal.lancamento.id));
-            setModal(null);
-          }}
+          onDelete={
+            modal.novo
+              ? undefined
+              : async () => {
+                  await persistLancamentos((lancamentos || []).filter((l) => l.id !== modal.lancamento.id));
+                  setModal(null);
+                }
+          }
         />
       )}
       {modal?.type === "consulta" && <ConsultaPlacaModal onClose={() => setModal(null)} />}
@@ -5775,43 +6381,6 @@ function LinhaConta({ item }) {
   );
 }
 
-// linha de gasto na ficha da moto (Manutenções ou Custos). O que veio do Caixa abre
-// pra editar no toque — é lá que se muda a natureza, e a natureza é quem decide em qual
-// das duas listas o gasto aparece
-function LinhaGastoDaMoto({ item, podeEditar, onEditar, onExcluir }) {
-  const editavel = podeEditar && item.doCaixa;
-  return (
-    <div
-      className="flex items-center justify-between text-xs"
-      style={{ gap: 8, padding: "5px 0", borderTop: "1px solid var(--rd-row-border)" }}
-    >
-      <button
-        onClick={editavel ? onEditar : undefined}
-        className="flex items-center text-left truncate"
-        style={{ gap: 7, minWidth: 0, flex: 1, background: "none", cursor: editavel ? "pointer" : "default", color: "var(--rd-text)" }}
-      >
-        <span className="truncate">
-          {formatDate(item.data)} · {item.descricao}
-        </span>
-        {editavel && <Pencil size={11} style={{ flex: "none", color: "var(--rd-text-faint)" }} />}
-      </button>
-      <span className="flex items-center flex-shrink-0" style={{ gap: 8 }}>
-        <span style={{ color: "var(--rd-text-dim)" }}>{formatCurrency(item.valorGasto)}</span>
-        {podeEditar && (
-          <button
-            onClick={onExcluir}
-            aria-label="Excluir"
-            className="flex items-center justify-center mbr-hover-grow"
-            style={{ color: "var(--rd-negative)", width: 30, height: 30, marginRight: -6, background: "none" }}
-          >
-            <Trash2 size={13} />
-          </button>
-        )}
-      </span>
-    </div>
-  );
-}
-
 function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
   return (
     <div className="flex flex-col" style={{ gap: 1 }}>
@@ -7744,19 +8313,35 @@ function AppAutenticado({ perfil, onSignOut }) {
           }
         }
 
-        /* FICHA ABERTA (moto e cliente) — no desktop a ficha era uma coluna só
-           esticada numa tela de 1200px: metade da largura vazia e uma barra de
-           rolagem de página inteira pra ver o fim. Em duas colunas ela cabe quase
-           sempre sem rolar, e as seções ficam com a mesma cara das do resto do site. */
-        .mbr-ficha-grid {
+        /* FICHA EM TELA INTEIRA (moto e cliente) — clicar numa linha troca a lista
+           por essa tela. No desktop ela tem duas colunas: extrato de um lado,
+           resultado/histórico/documentos do outro. No celular vira uma coluna só. */
+        .mbr-detalhe-grid {
           display: grid;
           grid-template-columns: minmax(0, 1fr);
           gap: var(--rd-s5);
           align-items: start;
         }
-        .mbr-ficha-col { display: flex; flex-direction: column; gap: var(--rd-s5); min-width: 0; }
         @media (min-width: 1024px) {
-          .mbr-ficha-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 40px; }
+          .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
+        }
+
+        /* faixa de números da ficha (mensalidade, vencimento, ...): 2 por linha no
+           celular, 4 numa linha só a partir do tablet */
+        .mbr-ficha-stats {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          border: 1px solid var(--rd-border);
+          border-radius: 14px;
+          overflow: hidden;
+        }
+        .mbr-ficha-stats > div { padding: 12px 14px; border-top: 1px solid var(--rd-border); min-width: 0; }
+        .mbr-ficha-stats > div:nth-child(-n + 2) { border-top: none; }
+        .mbr-ficha-stats > div:nth-child(even) { border-left: 1px solid var(--rd-border); }
+        @media (min-width: 700px) {
+          .mbr-ficha-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          .mbr-ficha-stats > div { border-top: none; border-left: none; }
+          .mbr-ficha-stats > div + div { border-left: 1px solid var(--rd-border); }
         }
 
         /* BARRA LATERAL — fixa, nunca rola com a página. A altura em dvh é o que
@@ -8123,6 +8708,8 @@ function AppAutenticado({ perfil, onSignOut }) {
                 persistClientes={clientesState.persist}
                 motos={motosState.items}
                 persistMotos={motosState.persist}
+                lancamentos={fluxoState.items}
+                persistLancamentos={fluxoState.persist}
               />
             ) : tab === "fluxo" ? (
               <FluxoCaixaView
