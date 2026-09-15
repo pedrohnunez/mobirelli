@@ -1782,7 +1782,7 @@ function ClienteDetalhe({
 
       <div className="mbr-detalhe-grid">
         {/* ---------- ESQUERDA ---------- */}
-        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
           <CartaoDetalhe>
             {moto ? (
               <>
@@ -1865,6 +1865,7 @@ function ClienteDetalhe({
           </CartaoDetalhe>
 
           <CartaoDetalhe
+            cresce
             titulo="Extrato do cliente"
             acao={
               <div className="mbr-filtros" style={{ minWidth: 0 }}>
@@ -1891,7 +1892,7 @@ function ClienteDetalhe({
             ) : (
               extratoFiltrado.map((item) => <LinhaExtrato key={item.id} item={item} />)
             )}
-            <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+            <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
               <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
                 {extratoFiltrado.length} lançamento{extratoFiltrado.length === 1 ? "" : "s"}
               </span>
@@ -1904,7 +1905,7 @@ function ClienteDetalhe({
         </div>
 
         {/* ---------- DIREITA ---------- */}
-        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
           <CartaoDetalhe titulo="O que esse cliente rendeu">
             <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
               <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-positive)" }}>{formatCurrency(recebido)}</span>
@@ -1946,7 +1947,7 @@ function ClienteDetalhe({
             )}
           </CartaoDetalhe>
 
-          <CartaoDetalhe titulo="Ficha e contato">
+          <CartaoDetalhe cresce titulo="Ficha e contato">
             <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
               <CampoFicha rotulo="CPF/CNPJ" valor={cliente.cpfCnpj || "—"} />
               <CampoFicha rotulo="Telefone" valor={cliente.telefone || "—"} />
@@ -3181,9 +3182,10 @@ const CORES_EXTRATO = {
 };
 const ROTULO_EXTRATO = { pagamento: "Pagamento", manutencao: "Manutenção", custo: "Custo", contrato: "Contrato" };
 
-function CartaoDetalhe({ titulo, acao, children, padding }) {
+function CartaoDetalhe({ titulo, acao, children, padding, cresce }) {
   return (
     <div
+      className={cresce ? "mbr-cresce" : undefined}
       style={{
         background: "var(--rd-surface)",
         border: "1px solid var(--rd-border)",
@@ -3503,7 +3505,7 @@ function MotoDetalhe({
 
       <div className="mbr-detalhe-grid">
         {/* ---------- COLUNA DA ESQUERDA ---------- */}
-        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
           <CartaoDetalhe>
             {moto.contratoAtual ? (
               <>
@@ -3598,6 +3600,7 @@ function MotoDetalhe({
           </CartaoDetalhe>
 
           <CartaoDetalhe
+            cresce
             titulo="Extrato da moto"
             acao={
               <div className="mbr-filtros" style={{ minWidth: 0 }}>
@@ -3631,7 +3634,7 @@ function MotoDetalhe({
                 />
               ))
             )}
-            <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+            <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
               <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
                 {extratoFiltrado.length} lançamento{extratoFiltrado.length === 1 ? "" : "s"}
               </span>
@@ -3646,7 +3649,7 @@ function MotoDetalhe({
         </div>
 
         {/* ---------- COLUNA DA DIREITA ---------- */}
-        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0 }}>
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
           <CartaoDetalhe titulo="Resultado desta moto">
             <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
               <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: saldo >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
@@ -3696,7 +3699,7 @@ function MotoDetalhe({
             )}
           </CartaoDetalhe>
 
-          <CartaoDetalhe titulo="Ficha e documentos">
+          <CartaoDetalhe cresce titulo="Ficha e documentos">
             <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
               <CampoFicha rotulo="Chassi" valor={moto.chassi || "—"} />
               <CampoFicha rotulo="Renavam" valor={moto.renavam || "—"} />
@@ -8320,11 +8323,16 @@ function AppAutenticado({ perfil, onSignOut }) {
           display: grid;
           grid-template-columns: minmax(0, 1fr);
           gap: var(--rd-s5);
-          align-items: start;
+          /* "stretch" (e não "start") é o que faz as duas colunas terminarem na mesma
+             linha: a mais curta cresce até a altura da mais alta, e lá dentro um cartão
+             marcado com .mbr-cresce absorve a sobra — em vez de deixar um vão branco */
+          align-items: stretch;
         }
         @media (min-width: 1024px) {
           .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
         }
+        .mbr-cresce { flex: 1 1 auto; display: flex; flex-direction: column; }
+        .mbr-rodape-baixo { margin-top: auto; padding-top: var(--rd-s4); }
 
         /* faixa de números da ficha (mensalidade, vencimento, ...): 2 por linha no
            celular, 4 numa linha só a partir do tablet */
