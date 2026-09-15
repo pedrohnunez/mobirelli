@@ -5141,8 +5141,8 @@ const FuturosView = forwardRef(function FuturosView(
           vazio={`Nada pra receber em ${monthLabel(mes)}.`}
           rodape={
             contas.proximoMes.length > 0 ? (
-              <div style={{ marginTop: "var(--rd-s5)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
-                <div style={{ ...RD_LABEL, color: "var(--rd-text-faint)", marginBottom: 4 }}>A partir do mês que vem</div>
+              <div style={{ marginTop: "var(--rd-s5)", paddingTop: "var(--rd-s4)", borderTop: "1px solid var(--rd-border)" }}>
+                <div style={{ ...RD_LABEL, color: "var(--rd-text-faint)", marginBottom: "var(--rd-s3)" }}>A partir do mês que vem</div>
                 {contas.proximoMes.map((item) => (
                   <LinhaConta2 key={item.id} item={{ ...item, feito: false, diasAte: 99 }} entrada rotuloAcao="" rotuloFeito="" />
                 ))}
@@ -5444,6 +5444,13 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     (l) => (filtroTipo === "tudo" || l.tipo === filtroTipo) && (!buscaLimpa || textoDoItem(l).includes(buscaLimpa))
   );
   const gruposDoMes = agruparLancamentos(itensFiltrados);
+  // a lista abre com 8 linhas: sem isso um mês cheio estica a coluna da esquerda e o
+  // painel do lado (para onde foi / 6 meses / atalhos) fica boiando lá em cima
+  const LIMITE_LISTA = 8;
+  const [verTodosLanc, setVerTodosLanc] = useState(false);
+  useEffect(() => setVerTodosLanc(false), [mesVisivel, filtroTipo, busca]);
+  const gruposVisiveis = verTodosLanc ? gruposDoMes : gruposDoMes.slice(0, LIMITE_LISTA);
+  const gruposEscondidos = gruposDoMes.length - gruposVisiveis.length;
   const somaVisivel = itensFiltrados.reduce((s2, l) => s2 + (l.tipo === "entrada" ? 1 : -1) * (Number(l.valor) || 0), 0);
 
   // PARA ONDE FOI — as saídas do mês somadas por natureza, a maior primeiro
@@ -5477,6 +5484,10 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   })();
   const maxSeis = Math.max(1, ...seisMeses.map((m) => Math.abs(m.saldo)));
   const mediaSeis = seisMeses.reduce((s2, m) => s2 + m.saldo, 0) / (seisMeses.length || 1);
+
+  // o que ainda falta acontecer no mês — mesma conta da aba Futuros, pra fechar o
+  // painel da direita com "o que já foi" em cima e "o que falta" embaixo
+  const faltaNoMes = contasDoMes(futuros, motos, clientes, lancamentos, mesVisivel);
 
   // EXPORTAR — baixa o mês em CSV (abre direto no Excel/Sheets)
   const exportarMes = () => {
@@ -5888,7 +5899,26 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                     {busca || filtroTipo !== "tudo" ? "Nada com esse filtro." : `Nenhum lançamento em ${monthLabel(mesVisivel)}.`}
                   </div>
                 ) : (
-                  gruposDoMes.map((g) => <LinhaCaixa key={g.chave} grupo={g} />)
+                  gruposVisiveis.map((g) => <LinhaCaixa key={g.chave} grupo={g} />)
+                )}
+
+                {gruposEscondidos > 0 && (
+                  <button
+                    onClick={() => setVerTodosLanc(true)}
+                    className="flex items-center"
+                    style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
+                  >
+                    <ChevronDown size={14} strokeWidth={2.75} /> Ver mais {gruposEscondidos} lançamento{gruposEscondidos === 1 ? "" : "s"}
+                  </button>
+                )}
+                {verTodosLanc && gruposDoMes.length > LIMITE_LISTA && (
+                  <button
+                    onClick={() => setVerTodosLanc(false)}
+                    className="flex items-center"
+                    style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-text-dim)" }}
+                  >
+                    <ChevronUp size={14} strokeWidth={2.75} /> Ver menos
+                  </button>
                 )}
 
                 <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
@@ -5985,6 +6015,40 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                   </div>
                 </div>
               )}
+
+              {/* fecha a coluna: o que já aconteceu está na lista, o que ainda falta
+                  neste mês está aqui — e o botão leva pra aba onde se resolve */}
+              <div
+                className="mbr-cresce"
+                style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
+              >
+                <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Ainda neste mês</div>
+                <div className="flex flex-col" style={{ gap: 9 }}>
+                  <LinhaLegendaValor cor="var(--rd-positive)" rotulo={`A receber · ${faltaNoMes.qtdReceber}`} valor={formatCurrency(faltaNoMes.aReceber)} />
+                  <LinhaLegendaValor cor="var(--rd-negative)" rotulo={`A pagar · ${faltaNoMes.qtdPagar}`} valor={formatCurrency(faltaNoMes.aPagar)} />
+                </div>
+                <div
+                  className="flex items-center justify-between flex-wrap"
+                  style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}
+                >
+                  <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Sobra prevista</span>
+                  <span
+                    style={{
+                      fontSize: 13.5,
+                      fontWeight: 700,
+                      color: faltaNoMes.aReceber - faltaNoMes.aPagar >= 0 ? "var(--rd-text)" : "var(--rd-negative)" }}
+                  >
+                    {formatCurrency(faltaNoMes.aReceber - faltaNoMes.aPagar)}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setView("futuros")}
+                  className="flex items-center"
+                  style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
+                >
+                  Ver em Futuros <ChevronRight size={13} strokeWidth={2.75} />
+                </button>
+              </div>
             </div>
           </div>
 
