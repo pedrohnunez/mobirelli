@@ -1649,7 +1649,6 @@ function ClienteDetalhe({
   onNovoPagamento,
   onPreview,
 }) {
-  const [filtro, setFiltro] = useState("tudo");
   const [menuAberto, setMenuAberto] = useState(false);
 
   const pagamentos = pagamentosDoCliente(cliente, motos, lancamentos);
@@ -1703,8 +1702,6 @@ function ClienteDetalhe({
     { id: "pagamento", label: "Pagamentos" },
     { id: "contrato", label: "Contratos" },
   ];
-  const extratoFiltrado = filtro === "tudo" ? extrato : extrato.filter((i) => i.tipo === filtro);
-  const somaDoFiltro = extratoFiltrado.reduce((s, i) => s + (i.sinal || 0) * Number(i.valor || 0), 0);
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
@@ -1864,44 +1861,7 @@ function ClienteDetalhe({
             )}
           </CartaoDetalhe>
 
-          <CartaoDetalhe
-            cresce
-            titulo="Extrato do cliente"
-            acao={
-              <div className="mbr-filtros" style={{ minWidth: 0 }}>
-                {filtros.map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setFiltro(f.id)}
-                    style={{
-                      padding: "5px 12px",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: filtro === f.id ? 700 : 600,
-                      background: filtro === f.id ? "var(--rd-brand)" : "transparent",
-                      color: filtro === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            }
-          >
-            {extratoFiltrado.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>Nada lançado pra esse cliente ainda.</div>
-            ) : (
-              extratoFiltrado.map((item) => <LinhaExtrato key={item.id} item={item} />)
-            )}
-            <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
-              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
-                {extratoFiltrado.length} lançamento{extratoFiltrado.length === 1 ? "" : "s"}
-              </span>
-              <span className="flex items-center" style={{ gap: 8 }}>
-                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Total</span>
-                <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rd-positive)" }}>{formatCurrency(somaDoFiltro)}</span>
-              </span>
-            </div>
-          </CartaoDetalhe>
+          <CartaoExtrato titulo="Extrato do cliente" itens={extrato} filtros={filtros} rotuloSaldo="Total" />
         </div>
 
         {/* ---------- DIREITA ---------- */}
@@ -2049,6 +2009,7 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos, lancamen
     <div className="flex flex-col" style={{ gap: "var(--rd-gap-secao)" }}>
       {clienteAberto ? (
         <ClienteDetalhe
+          key={clienteAberto.id}
           cliente={clienteAberto}
           moto={motoDoAberto}
           motos={motos}
@@ -3302,6 +3263,157 @@ function CampoFicha({ rotulo, valor }) {
   );
 }
 
+/* EXTRATO — a lista única (pagamentos, gastos e contratos) das fichas de moto e de
+   cliente. Abre já no mês mais recente com movimento, senão uma moto de dois anos
+   despeja quarenta linhas de uma vez: as setas andam mês a mês, "histórico" solta
+   tudo, e uma lista longa fica cortada em 8 linhas com um "ver mais" embaixo. */
+function CartaoExtrato({ titulo, itens, filtros, rotuloSaldo = "Saldo" }) {
+  const LIMITE = 8;
+  const [tipo, setTipo] = useState("tudo");
+  const [expandido, setExpandido] = useState(false);
+
+  const mesAtual = todayISO().slice(0, 7);
+  const mesesComItens = useMemo(
+    () => [...new Set((itens || []).map((i) => (i.data || "").slice(0, 7)).filter(Boolean))].sort(),
+    [itens]
+  );
+  const mesMaisNovo = mesesComItens[mesesComItens.length - 1];
+  // null = histórico inteiro
+  const [mes, setMes] = useState(() => (mesesComItens.includes(mesAtual) ? mesAtual : mesMaisNovo || mesAtual));
+
+  const mesMin = mesesComItens[0] || mesAtual;
+  const mesMax = mesMaisNovo && mesMaisNovo > mesAtual ? mesMaisNovo : mesAtual;
+  const vizinho = (passo) => {
+    const [a, m] = (mes || mesAtual).split("-").map(Number);
+    const d = new Date(a, m - 1 + passo, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const podeVoltar = !!mes && mes > mesMin;
+  const podeAvancar = !!mes && mes < mesMax;
+  const irPara = (novo) => { setMes(novo); setExpandido(false); };
+
+  const doMes = mes ? (itens || []).filter((i) => (i.data || "").slice(0, 7) === mes) : itens || [];
+  const filtrados = tipo === "tudo" ? doMes : doMes.filter((i) => i.tipo === tipo);
+  const visiveis = expandido ? filtrados : filtrados.slice(0, LIMITE);
+  const escondidas = filtrados.length - visiveis.length;
+  const soma = filtrados.reduce((s, i) => s + (i.sinal || 0) * Number(i.valor || 0), 0);
+
+  return (
+    <CartaoDetalhe
+      cresce
+      titulo={titulo}
+      acao={
+        <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+          <div
+            className="flex items-center"
+            style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
+          >
+            <button
+              onClick={() => (mes ? podeVoltar && irPara(vizinho(-1)) : irPara(mesMaisNovo || mesAtual))}
+              disabled={!!mes && !podeVoltar}
+              aria-label="Mês anterior"
+              className="flex items-center justify-center"
+              style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: !mes || podeVoltar ? 1 : 0.35 }}
+            >
+              <ChevronLeft size={15} strokeWidth={2.75} />
+            </button>
+            <span className="text-center" style={{ minWidth: mes ? 62 : 74, fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>
+              {mes ? monthLabel(mes) : "Histórico"}
+            </span>
+            <button
+              onClick={() => (mes ? podeAvancar && irPara(vizinho(1)) : irPara(mesMaisNovo || mesAtual))}
+              disabled={!!mes && !podeAvancar}
+              aria-label="Próximo mês"
+              className="flex items-center justify-center"
+              style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: !mes || podeAvancar ? 1 : 0.35 }}
+            >
+              <ChevronRight size={15} strokeWidth={2.75} />
+            </button>
+          </div>
+          <button
+            onClick={() => irPara(mes ? null : mesesComItens.includes(mesAtual) ? mesAtual : mesMaisNovo || mesAtual)}
+            style={{
+              fontSize: 11.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              padding: "5px 12px",
+              background: mes ? "transparent" : "var(--rd-brand)",
+              border: mes ? "1px solid var(--rd-border)" : "1px solid var(--rd-brand)",
+              color: mes ? "var(--rd-text-dim)" : "var(--rd-brand-light)" }}
+          >
+            {mes ? "Ver tudo" : "Por mês"}
+          </button>
+        </div>
+      }
+    >
+      <div className="mbr-filtros" style={{ minWidth: 0, alignSelf: "flex-start", marginBottom: "var(--rd-s3)" }}>
+        {filtros.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => { setTipo(f.id); setExpandido(false); }}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: tipo === f.id ? 700 : 600,
+              background: tipo === f.id ? "var(--rd-brand)" : "transparent",
+              color: tipo === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {filtrados.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>
+          {mes ? `Nada lançado em ${monthLabel(mes)}.` : "Nada lançado aqui ainda."}
+        </div>
+      ) : (
+        visiveis.map((item) => (
+          <LinhaExtrato
+            key={item.id}
+            item={item}
+            onEditar={permissoes.podeEditar ? item.editar : null}
+            onExcluir={permissoes.podeEditar ? item.excluir : null}
+          />
+        ))
+      )}
+
+      {escondidas > 0 && (
+        <button
+          onClick={() => setExpandido(true)}
+          className="flex items-center"
+          style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
+        >
+          <ChevronDown size={14} strokeWidth={2.75} /> Ver mais {escondidas} lançamento{escondidas === 1 ? "" : "s"}
+        </button>
+      )}
+      {expandido && filtrados.length > LIMITE && (
+        <button
+          onClick={() => setExpandido(false)}
+          className="flex items-center"
+          style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-text-dim)" }}
+        >
+          <ChevronUp size={14} strokeWidth={2.75} /> Ver menos
+        </button>
+      )}
+
+      <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
+        <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+          {filtrados.length} lançamento{filtrados.length === 1 ? "" : "s"}
+          {mes ? ` em ${monthLabel(mes)}` : " no total"}
+        </span>
+        <span className="flex items-center" style={{ gap: 8 }}>
+          <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>{rotuloSaldo}</span>
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: soma >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+            {soma >= 0 ? "+" : "−"} {formatCurrency(Math.abs(soma))}
+          </span>
+        </span>
+      </div>
+    </CartaoDetalhe>
+  );
+}
+
 function MotoDetalhe({
   moto,
   cliente,
@@ -3325,7 +3437,6 @@ function MotoDetalhe({
   onPreview,
   diasParados,
 }) {
-  const [filtro, setFiltro] = useState("tudo");
   const [menuAberto, setMenuAberto] = useState(false);
   const [verMapa, setVerMapa] = useState(false);
 
@@ -3406,8 +3517,6 @@ function MotoDetalhe({
     { id: "manutencao", label: "Manutenções" },
     { id: "custo", label: "Custos" },
   ];
-  const extratoFiltrado = filtro === "tudo" ? extrato : extrato.filter((i) => i.tipo === filtro);
-  const saldoDoFiltro = extratoFiltrado.reduce((s, i) => s + (i.sinal || 0) * Number(i.valor || 0), 0);
 
   const anteriores = [...(moto.historicoContratos || [])].sort((a, b) => (a.encerradoEm > b.encerradoEm ? -1 : 1));
   const linkRastreio = moto.linkRastreamento || config?.linkRastreioGeral;
@@ -3599,53 +3708,7 @@ function MotoDetalhe({
             )}
           </CartaoDetalhe>
 
-          <CartaoDetalhe
-            cresce
-            titulo="Extrato da moto"
-            acao={
-              <div className="mbr-filtros" style={{ minWidth: 0 }}>
-                {filtros.map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setFiltro(f.id)}
-                    style={{
-                      padding: "5px 12px",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: filtro === f.id ? 700 : 600,
-                      background: filtro === f.id ? "var(--rd-brand)" : "transparent",
-                      color: filtro === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            }
-          >
-            {extratoFiltrado.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>Nada lançado aqui ainda.</div>
-            ) : (
-              extratoFiltrado.map((item) => (
-                <LinhaExtrato
-                  key={item.id}
-                  item={item}
-                  onEditar={permissoes.podeEditar ? item.editar : null}
-                  onExcluir={permissoes.podeEditar ? item.excluir : null}
-                />
-              ))
-            )}
-            <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
-              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
-                {extratoFiltrado.length} lançamento{extratoFiltrado.length === 1 ? "" : "s"}
-              </span>
-              <span className="flex items-center" style={{ gap: 8 }}>
-                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Saldo</span>
-                <span style={{ fontSize: 13.5, fontWeight: 700, color: saldoDoFiltro >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
-                  {saldoDoFiltro >= 0 ? "+" : "−"} {formatCurrency(Math.abs(saldoDoFiltro))}
-                </span>
-              </span>
-            </div>
-          </CartaoDetalhe>
+          <CartaoExtrato titulo="Extrato da moto" itens={extrato} filtros={filtros} rotuloSaldo="Saldo" />
         </div>
 
         {/* ---------- COLUNA DA DIREITA ---------- */}
@@ -4002,6 +4065,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     <div className="flex flex-col" style={{ gap: "var(--rd-gap-secao)" }}>
       {motoAberta ? (
         <MotoDetalhe
+          key={motoAberta.id}
           moto={motoAberta}
           cliente={clientes.find((c) => c.id === motoAberta.contratoAtual?.clienteId)}
           clientes={clientes}
