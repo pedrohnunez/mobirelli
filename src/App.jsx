@@ -2537,8 +2537,11 @@ const TrackingMap = forwardRef(function TrackingMap(
         const data = await res.json();
         if (cancelled) return;
 
+        // a placa vem do rastreador do jeito que foi cadastrada lá ("UGH-2J93 - Honda"),
+        // e no app ela é guardada sem traço — comparar cru fazia a moto não ser
+        // reconhecida ("moto não cadastrada") e o mapa da ficha vir vazio
         const devices = Object.values(data).filter((d) =>
-          filterPlaca ? (d.name || "").toUpperCase().startsWith(filterPlaca.toUpperCase()) : true
+          filterPlaca ? placaLimpa((d.name || "").split(" - ")[0]) === placaLimpa(filterPlaca) : true
         );
 
         const bounds = new maplibregl.LngLatBounds();
@@ -2566,7 +2569,7 @@ const TrackingMap = forwardRef(function TrackingMap(
             // no lugar antigo, "descolando" da moto conforme ela andava
             if (popupChaveRef.current === chave && popupRef.current) {
               popupRef.current.setLngLat([lng, lat]);
-              const moto = motosRef.current?.find((m) => (m.placa || "").toUpperCase() === placa.toUpperCase());
+              const moto = motosRef.current?.find((m) => placaLimpa(m.placa) === placaLimpa(placa));
               const cliente = moto?.contratoAtual ? clientesRef.current?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
               popupRef.current.setHTML(rastreioPopupHtml(placa, d, moto, cliente?.nome));
             }
@@ -2597,7 +2600,7 @@ const TrackingMap = forwardRef(function TrackingMap(
               seguindoRef.current = chave;
               map.flyTo({ center: ll, zoom: 16, duration: 600 });
 
-              const moto = motosRef.current?.find((m) => (m.placa || "").toUpperCase() === entry.placa.toUpperCase());
+              const moto = motosRef.current?.find((m) => placaLimpa(m.placa) === placaLimpa(entry.placa));
               const cliente = moto?.contratoAtual ? clientesRef.current?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
 
               if (popupRef.current) popupRef.current.remove();
@@ -3571,20 +3574,12 @@ function CartaoExtrato({ titulo, itens, filtros, rotuloSaldo = "Saldo" }) {
       )}
 
       {escondidas > 0 && (
-        <button
-          onClick={() => setExpandido(true)}
-          className="flex items-center"
-          style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
-        >
+        <button onClick={() => setExpandido(true)} className="mbr-ver-mais">
           <ChevronDown size={14} strokeWidth={2.75} /> Ver mais {escondidas} lançamento{escondidas === 1 ? "" : "s"}
         </button>
       )}
       {expandido && filtrados.length > LIMITE && (
-        <button
-          onClick={() => setExpandido(false)}
-          className="flex items-center"
-          style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-text-dim)" }}
-        >
+        <button onClick={() => setExpandido(false)} className="mbr-ver-mais mbr-ver-mais--menos">
           <ChevronUp size={14} strokeWidth={2.75} /> Ver menos
         </button>
       )}
@@ -5529,9 +5524,10 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     (l) => (filtroTipo === "tudo" || l.tipo === filtroTipo) && (!buscaLimpa || textoDoItem(l).includes(buscaLimpa))
   );
   const gruposDoMes = agruparLancamentos(itensFiltrados);
-  // a lista abre com 8 linhas: sem isso um mês cheio estica a coluna da esquerda e o
-  // painel do lado (para onde foi / 6 meses / atalhos) fica boiando lá em cima
-  const LIMITE_LISTA = 8;
+  // a lista abre com 10 linhas: sem isso um mês cheio estica a coluna da esquerda e o
+  // painel do lado (para onde foi / 6 meses / atalhos) fica boiando lá em cima. 10 é o
+  // que chega mais perto de fechar a mesma altura da coluna da direita
+  const LIMITE_LISTA = 10;
   const [verTodosLanc, setVerTodosLanc] = useState(false);
   useEffect(() => setVerTodosLanc(false), [mesVisivel, filtroTipo, busca]);
   const gruposVisiveis = verTodosLanc ? gruposDoMes : gruposDoMes.slice(0, LIMITE_LISTA);
@@ -5539,10 +5535,13 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   const somaVisivel = itensFiltrados.reduce((s2, l) => s2 + (l.tipo === "entrada" ? 1 : -1) * (Number(l.valor) || 0), 0);
 
   // PARA ONDE FOI — as saídas do mês somadas por natureza, a maior primeiro
+  // conta TODAS as saídas que aparecem na lista do mês, inclusive as previstas — a
+  // classificação "Administrativo" some da conta se o que existe no mês é só conta
+  // prevista (contabilidade, assinatura), que é justamente o caso comum
   const paraOndeFoi = (() => {
     const cores = ["var(--rd-negative)", "var(--rd-attention)", "var(--rd-brand-light)", "var(--rd-text-muted)"];
     const por = new Map();
-    lancadosDoMes
+    itensDoMes
       .filter((l) => l.tipo === "saida")
       .forEach((l) => {
         const nome = l.natureza || "Sem classificação";
@@ -5550,7 +5549,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       });
     const lista = [...por.entries()].map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor);
     const maior = lista[0]?.valor || 1;
-    return lista.slice(0, 5).map((c, i) => ({ ...c, pct: Math.max(3, (c.valor / maior) * 100), cor: cores[i % cores.length] }));
+    return lista.slice(0, 6).map((c, i) => ({ ...c, pct: Math.max(3, (c.valor / maior) * 100), cor: cores[i % cores.length] }));
   })();
 
   // ÚLTIMOS 6 MESES — o saldo de cada um, terminando no mês que está na tela
@@ -5988,20 +5987,12 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                 )}
 
                 {gruposEscondidos > 0 && (
-                  <button
-                    onClick={() => setVerTodosLanc(true)}
-                    className="flex items-center"
-                    style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
-                  >
+                  <button onClick={() => setVerTodosLanc(true)} className="mbr-ver-mais">
                     <ChevronDown size={14} strokeWidth={2.75} /> Ver mais {gruposEscondidos} lançamento{gruposEscondidos === 1 ? "" : "s"}
                   </button>
                 )}
                 {verTodosLanc && gruposDoMes.length > LIMITE_LISTA && (
-                  <button
-                    onClick={() => setVerTodosLanc(false)}
-                    className="flex items-center"
-                    style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-text-dim)" }}
-                  >
+                  <button onClick={() => setVerTodosLanc(false)} className="mbr-ver-mais mbr-ver-mais--menos">
                     <ChevronUp size={14} strokeWidth={2.75} /> Ver menos
                   </button>
                 )}
@@ -6022,7 +6013,10 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
 
             {/* ---------- COLUNA DA DIREITA ---------- */}
             <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
-              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+              {/* minHeight fixo: são 4 classificações possíveis no app, então o cartão tem
+                  sempre a mesma altura — sem isso um mês com 2 tipos de gasto e outro com
+                  4 deixavam a coluna (e o vão embaixo da lista) de tamanhos diferentes */}
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)", minHeight: 188 }}>
                 <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Para onde foi</div>
                 {paraOndeFoi.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>Nenhuma saída em {monthLabel(mesVisivel)}.</div>
@@ -7783,7 +7777,7 @@ function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirM
     return (devices || [])
       .map((d) => {
         const placa = placaDoDevice(d);
-        const moto = (motos || []).find((m) => (m.placa || "").toUpperCase() === placa.toUpperCase());
+        const moto = (motos || []).find((m) => placaLimpa(m.placa) === placaLimpa(placa));
         const cliente = moto?.contratoAtual ? (clientes || []).find((c) => c.id === moto.contratoAtual.clienteId) : null;
         const status = statusDoDevice(d);
         return {
@@ -7806,6 +7800,9 @@ function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirM
     movimento: linhas.filter((l) => l.status === "movimento").length,
     parada: linhas.filter((l) => l.status === "parada").length,
     offline: linhas.filter((l) => l.status === "offline").length,
+    // rastreador que não bate com nenhuma placa da Frota — é o que explica a conta
+    // "11 rastreadores, 10 motos" sem parecer defeito
+    semMoto: linhas.filter((l) => !l.moto).length,
   };
 
   const q = semAcento(busca.trim());
@@ -7856,6 +7853,16 @@ function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirM
               {texto}
             </span>
           ))}
+          {contagem.semMoto > 0 && (
+            <span
+              className="flex items-center"
+              title="Rastreador que não bate com nenhuma placa cadastrada na Frota — confira a placa lá na Melocaliza ou cadastre a moto"
+              style={{ gap: 7, color: "var(--rd-text-dim)", fontWeight: 600 }}
+            >
+              <AlertTriangle size={13} />
+              {contagem.semMoto} sem moto cadastrada
+            </span>
+          )}
         </div>
         <div className="flex items-center" style={{ gap: 10, marginLeft: "auto" }}>
           <span
@@ -9083,6 +9090,22 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
         }
         .mbr-cresce { flex: 1 1 auto; display: flex; flex-direction: column; }
+
+        /* "Ver mais" — mesma faixa centralizada em toda lista que corta (Caixa e fichas),
+           encostada na última linha, pra não depender do tamanho do vão que sobra */
+        .mbr-ver-mais {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          width: 100%;
+          padding: 11px 0 2px;
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--rd-brand-light);
+          background: none;
+        }
+        .mbr-ver-mais--menos { color: var(--rd-text-dim); }
 
         /* RASTREIO — barra de cima, lista à esquerda e mapa ocupando o resto. No
            celular a lista e a barra somem: lá o mapa é a tela inteira, com o cabeçalho
