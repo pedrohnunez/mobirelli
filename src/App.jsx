@@ -9110,7 +9110,17 @@ function AppAutenticado({ perfil, onSignOut }) {
         .mbr-rastreio-stats > div { padding: 9px 10px; min-width: 0; }
         .mbr-rastreio-stats > div + div { border-left: 1px solid var(--rd-border); }
         /* na barra estreita as pílulas quebram em duas linhas em vez de sumir pro lado */
-        .mbr-rastreio-lista .mbr-filtros { flex-wrap: wrap; overflow-x: visible; }
+        /* na barra estreita as pílulas quebram em duas linhas — e aí a moldura não pode
+           mais ser uma cápsula: com 999px de raio numa caixa de duas linhas a curva das
+           pontas passa por dentro das pílulas e o verde do "Todas" vazava pra fora.
+           Vira um retângulo de cantos arredondados, que acompanha as duas linhas. */
+        .mbr-rastreio-lista .mbr-filtros {
+          flex-wrap: wrap;
+          overflow-x: visible;
+          border-radius: 14px;
+          padding: 5px;
+          row-gap: 4px;
+        }
         .mbr-rastreio-lista .mbr-filtros > button { padding: 5px 10px !important; font-size: 11.5px !important; }
         .mbr-rastreio-cartao {
           position: absolute;
