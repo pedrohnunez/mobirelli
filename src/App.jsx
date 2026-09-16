@@ -1263,9 +1263,10 @@ const DIAS_SEMANA_ABREV = ["D", "S", "T", "Q", "Q", "S", "S"];
 // gatilho, pra escapar de qualquer contexto de empilhamento do modal/card por cima).
 //
 // "recorrente" liga o modo de conta "Todo mês": em vez de trocar a data (um dia certo,
-// num mês certo), cada clique liga/desliga aquele DIA DO MÊS como mais um vencimento
-// (diasExtras) — o próprio dia de "value" nunca sai da seleção por aqui.
-function CampoData({ value, onChange, placeholder, recorrente, diasExtras, onToggleDiaExtra, limpavel }) {
+// num mês certo), cada clique liga/desliga aquele DIA DO MÊS como vencimento — todo
+// clique é reversível, inclusive no dia que já está marcado como principal (quem decide
+// pra onde o "principal" migra quando ele é desmarcado é o onToggleDia do chamador)
+function CampoData({ value, onChange, placeholder, recorrente, diasExtras, onToggleDia, limpavel }) {
   const [aberto, setAberto] = useState(false);
   const [pos, setPos] = useState(null);
   const gatilhoRef = useRef(null);
@@ -1306,7 +1307,7 @@ function CampoData({ value, onChange, placeholder, recorrente, diasExtras, onTog
 
   const selecionarDia = (dia) => {
     if (recorrente) {
-      if (dia !== diaPrincipal) onToggleDiaExtra(dia);
+      onToggleDia(dia);
       return;
     }
     onChange({ target: { value: `${mesGradeKey}-${String(dia).padStart(2, "0")}` } });
@@ -1338,10 +1339,12 @@ function CampoData({ value, onChange, placeholder, recorrente, diasExtras, onTog
       <button
         type="button"
         onClick={() => (aberto ? fechar() : abrir())}
-        className="flex items-center justify-between w-full"
-        style={{ ...inputStyle, marginBottom: 0, paddingRight: limpavel && value ? 34 : undefined }}
+        className="flex items-center w-full"
+        style={{ ...inputStyle, marginBottom: 0, gap: 8, paddingRight: limpavel && value ? 56 : 13 }}
       >
-        <span style={{ color: value ? "var(--rd-text)" : "var(--rd-text-dim)" }}>{rotulo}</span>
+        <span className="truncate" style={{ flex: 1, minWidth: 0, textAlign: "left", color: value ? "var(--rd-text)" : "var(--rd-text-dim)" }}>
+          {rotulo}
+        </span>
         <CalendarClock size={15} color="var(--rd-text-dim)" style={{ flexShrink: 0 }} />
       </button>
       {limpavel && value && (
@@ -5009,11 +5012,15 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
   const trocarModo = (novo) => {
     setModo(novo);
+    // "Todo mês" começa sempre no dia 1, marcado sozinho — dali a pessoa liga/desliga
+    // outros dias no próprio calendário (ver CampoData)
+    if (novo === "mensal" && !editando) setDiasExtras([]);
     setForm((f) => ({
       ...f,
       recorrente: novo === "mensal",
       parcelas: novo === "parcelado" ? (Number(f.parcelas) > 1 ? f.parcelas : 2) : 1,
       pago: novo === "unica" ? f.pago : false,
+      vencimento: novo === "mensal" && !editando ? `${(f.vencimento || todayISO()).slice(0, 8)}01` : f.vencimento,
     }));
   };
 
@@ -5028,6 +5035,20 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   // duas contas iguais separadas
   const diaPrincipal = Number((form.vencimento || todayISO()).slice(8, 10)) || 1;
   const [diasExtras, setDiasExtras] = useState([]);
+
+  // clique em qualquer dia liga/desliga ele — inclusive o dia principal: se ele for
+  // desmarcado, o menor dos dias extras assume o lugar dele (o campo "vencimento"
+  // sempre precisa de pelo menos um dia; por isso o último dia marcado não sai)
+  const toggleDiaVencimento = (dia) => {
+    if (dia === diaPrincipal) {
+      if (diasExtras.length === 0) return;
+      const [novoPrincipal, ...resto] = diasExtras;
+      setDiasExtras(resto);
+      setForm({ ...form, vencimento: `${(form.vencimento || todayISO()).slice(0, 8)}${String(novoPrincipal).padStart(2, "0")}` });
+      return;
+    }
+    setDiasExtras(diasExtras.includes(dia) ? diasExtras.filter((d) => d !== dia) : [...diasExtras, dia].sort((a, b) => a - b));
+  };
 
   // igual ao modal de lançamento: o formulário abre curto e o resto fica atrás de "Mais
   // opções" — já aberto se a conta que está sendo editada usa algum desses campos
@@ -5117,7 +5138,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
             onChange={set("vencimento")}
             recorrente={modo === "mensal" && !editando}
             diasExtras={diasExtras}
-            onToggleDiaExtra={(dia) => setDiasExtras((prev) => (prev.includes(dia) ? prev.filter((d) => d !== dia) : [...prev, dia].sort((a, b) => a - b)))}
+            onToggleDia={toggleDiaVencimento}
           />
         </div>
       </Row2>
