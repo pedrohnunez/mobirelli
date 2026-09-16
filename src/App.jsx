@@ -354,8 +354,17 @@ function contratosComoFuturos(motos) {
     }));
 }
 
+// CONTA "POR MOTO" — coisas como o rastreador são o mesmo valor em cada moto da
+// frota. Em vez de cadastrar uma conta por moto (e ter que mexer nisso toda vez que
+// entra ou sai moto), a conta guarda o valor UNITÁRIO e se multiplica sozinha pelo
+// tamanho da frota.
+function valorDoFuturo(f, motos) {
+  const valor = Number(f?.valor) || 0;
+  return f?.porMoto ? valor * ((motos || []).length || 0) : valor;
+}
+
 function totaisFuturos(futuros, motos) {
-  const todos = [...(futuros || []), ...contratosComoFuturos(motos)];
+  const todos = [...(futuros || []).map((f) => ({ ...f, valor: valorDoFuturo(f, motos) })), ...contratosComoFuturos(motos)];
   const recorrentes = todos.filter((f) => f.recorrente);
   const fixoMensalSaida = recorrentes.filter((f) => f.tipo !== "entrada").reduce((s, f) => s + (Number(f.valor) || 0), 0);
   const fixoMensalEntrada = recorrentes.filter((f) => f.tipo === "entrada").reduce((s, f) => s + (Number(f.valor) || 0), 0);
@@ -421,7 +430,7 @@ function futurosProximosDias(futuros, motos, dias = 7) {
 
   todos.forEach((f) => {
     if (!f.vencimento) return;
-    const valor = Number(f.valor) || 0;
+    const valor = valorDoFuturo(f, motos);
     const itens = f.tipo === "entrada" ? itensEntrada : itensSaida;
     const soma = (v) => {
       if (f.tipo === "entrada") entrada += v;
@@ -494,7 +503,7 @@ function pendenciasDoMes(futuros, motos, lancamentos, mesKey) {
     (f.tipo === "entrada" ? aReceber : aPagar).push({
       id: f.id,
       label: placa && !nome.includes(placa) ? `${nome} (${placa})` : nome,
-      valor: Number(f.valor) || 0,
+      valor: valorDoFuturo(f, motos),
       data: dataDoFuturoNoMes(f, mesKey),
     });
   });
@@ -555,6 +564,7 @@ function contasDoMes(futuros, motos, clientes, lancamentos, mesKey) {
     const moto = (motos || []).find((m) => m.id === f.motoId);
     const partes = [];
     if (moto) partes.push(formatPlaca(moto.placa));
+    if (f.porMoto) partes.push(`${formatCurrency(Number(f.valor) || 0)} × ${(motos || []).length} moto${(motos || []).length === 1 ? "" : "s"}`);
     if (f.parcelasTotal > 1) partes.push(`parcela ${f.parcelaAtual || 1} de ${f.parcelasTotal}`);
     else if (recorrente) partes.push("fixo mensal");
     const detalhe = detalheDoFuturo(f);
@@ -565,7 +575,7 @@ function contasDoMes(futuros, motos, clientes, lancamentos, mesKey) {
       dia: Number(data.slice(8, 10)) || 1,
       titulo: nomeDoFuturo(f),
       sub: partes.join(" · "),
-      valor: Number(f.valor) || 0,
+      valor: valorDoFuturo(f, motos),
       feito,
       feitoEm: feito ? data : null,
       diasAte: diasAte(data),
@@ -4820,7 +4830,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 
   const salvar = () => {
-    const { aplicarTodas, parcelas, ...base } = form;
+    const { aplicarTodas, parcelas, ...base } = form; // "aplicarTodas" é de contas antigas, não é mais usado
     const valor = valorNum;
     const nome = (base.nome || "").trim();
     const comNome = { ...base, nome, valor };
@@ -4846,10 +4856,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
       });
     };
 
-    const alvos =
-      aplicarTodas && (motos || []).length > 0
-        ? motos.map((m) => ({ ...comNome, id: uid(), motoId: m.id }))
-        : [comNome];
+    const alvos = [comNome];
 
     const deveParcelar = modo === "parcelado" && nParcelas > 1 && !jaEhParcela;
     onSave(deveParcelar ? alvos.flatMap(gerarParcelas) : alvos);
@@ -4974,15 +4981,31 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
                   ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
                 ]}
               />
-              {!editando && (
-                <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-                  <input
-                    type="checkbox"
-                    checked={form.aplicarTodas}
-                    onChange={(e) => setForm({ ...form, aplicarTodas: e.target.checked })}
-                  />
-                  Aplicar a todas as motos ({motos.length}) — lança uma conta dessas pra cada moto
-                </label>
+              {/* rastreador, seguro por moto e afins: uma conta só, com o valor POR MOTO,
+                  que se multiplica sozinha pelo tamanho da frota — em vez de cadastrar
+                  uma conta igual pra cada moto e ter que mexer em todas quando entra ou
+                  sai uma moto */}
+              <label className="flex items-start gap-2 mb-2 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
+                <input
+                  type="checkbox"
+                  checked={!!form.porMoto}
+                  onChange={(e) => setForm({ ...form, porMoto: e.target.checked, motoId: e.target.checked ? "" : form.motoId })}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  É por moto — o valor acima vale pra cada moto da frota
+                  {form.porMoto && (motos || []).length > 0 && (
+                    <b style={{ color: theme.mint }}>
+                      {" "}
+                      = {formatCurrency(valorNum * motos.length)} ({motos.length} moto{motos.length === 1 ? "" : "s"})
+                    </b>
+                  )}
+                </span>
+              </label>
+              {form.porMoto && (
+                <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                  Quando entrar ou sair moto da frota, essa conta se ajusta sozinha.
+                </div>
               )}
             </>
           )}
@@ -5430,7 +5453,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       // aparece como título da linha). Antes vinha a categoria aqui, então uma conta
       // chamada "X" com categoria "Seguro" virava um lançamento chamado "Seguro"
       categoria: nomeDoFuturo(original),
-      valor: Number(original.valor) || 0,
+      valor: valorDoFuturo(original, motos),
       descricao: detalheDoFuturo(original),
       forma: "",
       motoId: original.motoId || "",
@@ -5471,9 +5494,11 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   };
   const podeVoltarMes = mesVisivel > mesMaisAntigo;
   // os números e a lista do mês que está na tela (lançado + o que ainda está previsto)
+  // A aba "Lançado" mostra só o que ACONTECEU. O que ainda está previsto vive na aba
+  // Futuros — antes as contas previstas apareciam aqui também, o que duplicava a
+  // informação e ainda entrava sem classificação no "Para onde foi".
   const lancadosDoMes = porMes[mesVisivel] || [];
-  const previstosDoMes = pendenciasPorMes[mesVisivel] || [];
-  const itensDoMes = [...lancadosDoMes, ...previstosDoMes].sort((a, b) => (a.data < b.data ? 1 : -1));
+  const itensDoMes = [...lancadosDoMes].sort((a, b) => (a.data < b.data ? 1 : -1));
   const entradaDoMes = lancadosDoMes.filter((l) => l.tipo === "entrada").reduce((s2, l) => s2 + Number(l.valor), 0);
   const saidaDoMes = lancadosDoMes.filter((l) => l.tipo === "saida").reduce((s2, l) => s2 + Number(l.valor), 0);
   const saldoDoMes = entradaDoMes - saidaDoMes;
@@ -5527,21 +5552,13 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   const itensFiltrados = itensDoMes.filter(
     (l) => (filtroTipo === "tudo" || l.tipo === filtroTipo) && (!buscaLimpa || textoDoItem(l).includes(buscaLimpa))
   );
+  // a lista inteira fica dentro do cartão e rola por dentro dele: assim o mês com 5
+  // lançamentos e o mês com 40 ocupam exatamente a mesma altura na tela
   const gruposDoMes = agruparLancamentos(itensFiltrados);
-  // a lista abre com 10 linhas: sem isso um mês cheio estica a coluna da esquerda e o
-  // painel do lado (para onde foi / 6 meses / atalhos) fica boiando lá em cima. 10 é o
-  // que chega mais perto de fechar a mesma altura da coluna da direita
-  const LIMITE_LISTA = 10;
-  const [verTodosLanc, setVerTodosLanc] = useState(false);
-  useEffect(() => setVerTodosLanc(false), [mesVisivel, filtroTipo, busca]);
-  const gruposVisiveis = verTodosLanc ? gruposDoMes : gruposDoMes.slice(0, LIMITE_LISTA);
-  const gruposEscondidos = gruposDoMes.length - gruposVisiveis.length;
   const somaVisivel = itensFiltrados.reduce((s2, l) => s2 + (l.tipo === "entrada" ? 1 : -1) * (Number(l.valor) || 0), 0);
 
   // PARA ONDE FOI — as saídas do mês somadas por natureza, a maior primeiro
-  // conta TODAS as saídas que aparecem na lista do mês, inclusive as previstas — a
-  // classificação "Administrativo" some da conta se o que existe no mês é só conta
-  // prevista (contabilidade, assinatura), que é justamente o caso comum
+  // as saídas do mês por classificação — as mesmas linhas que a lista mostra
   const paraOndeFoi = (() => {
     const cores = ["var(--rd-negative)", "var(--rd-attention)", "var(--rd-brand-light)", "var(--rd-text-muted)"];
     const por = new Map();
@@ -5982,24 +5999,15 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                   </div>
                 </div>
 
-                {gruposDoMes.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>
-                    {busca || filtroTipo !== "tudo" ? "Nada com esse filtro." : `Nenhum lançamento em ${monthLabel(mesVisivel)}.`}
-                  </div>
-                ) : (
-                  gruposVisiveis.map((g) => <LinhaCaixa key={g.chave} grupo={g} />)
-                )}
-
-                {gruposEscondidos > 0 && (
-                  <button onClick={() => setVerTodosLanc(true)} className="mbr-ver-mais">
-                    <ChevronDown size={14} strokeWidth={2.75} /> Ver mais {gruposEscondidos} lançamento{gruposEscondidos === 1 ? "" : "s"}
-                  </button>
-                )}
-                {verTodosLanc && gruposDoMes.length > LIMITE_LISTA && (
-                  <button onClick={() => setVerTodosLanc(false)} className="mbr-ver-mais mbr-ver-mais--menos">
-                    <ChevronUp size={14} strokeWidth={2.75} /> Ver menos
-                  </button>
-                )}
+                <div className="mbr-lista-rolante">
+                  {gruposDoMes.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>
+                      {busca || filtroTipo !== "tudo" ? "Nada com esse filtro." : `Nenhum lançamento em ${monthLabel(mesVisivel)}.`}
+                    </div>
+                  ) : (
+                    gruposDoMes.map((g) => <LinhaCaixa key={g.chave} grupo={g} />)
+                  )}
+                </div>
 
                 <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
                   <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
@@ -9099,7 +9107,30 @@ function AppAutenticado({ perfil, onSignOut }) {
         @media (min-width: 1024px) {
           .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
         }
-        .mbr-cresce { flex: 1 1 auto; display: flex; flex-direction: column; }
+        .mbr-cresce { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+        /* lista que rola dentro do cartão: o cabeçalho e o rodapé ficam parados e só as
+           linhas correm — é o que faz o cartão ter sempre a mesma altura, com 5 ou com
+           50 lançamentos */
+        /* no celular a lista corre com a página (rolagem dentro de rolagem em tela
+           pequena é ruim); do tablet deitado pra cima ela rola dentro do cartão */
+        @media (min-width: 1024px) {
+          .mbr-lista-rolante {
+            /* base 0: a lista não "empurra" a altura do cartão, ela recebe o espaço que
+               sobra — é isso que faz o mês de 5 e o de 50 lançamentos medirem igual */
+            flex: 1 1 0;
+            min-height: 160px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: var(--rd-border) transparent;
+            margin-right: -6px;
+            padding-right: 6px;
+          }
+          .mbr-lista-rolante::-webkit-scrollbar { width: 8px; }
+          .mbr-lista-rolante::-webkit-scrollbar-thumb { background: var(--rd-border); border-radius: 999px; }
+          .mbr-lista-rolante::-webkit-scrollbar-track { background: transparent; }
+        }
 
         /* "Ver mais" — mesma faixa centralizada em toda lista que corta (Caixa e fichas),
            encostada na última linha, pra não depender do tamanho do vão que sobra */
