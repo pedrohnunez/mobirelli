@@ -9649,11 +9649,11 @@ function AppAutenticado({ perfil, onSignOut }) {
             style={{ gap: 11, padding: menuRecolhido ? 0 : "0 8px", background: "none", justifyContent: menuRecolhido ? "center" : "flex-start" }}
           >
             {menuRecolhido ? (
-              <div style={{ width: 34, height: 34, overflow: "hidden", flex: "none" }}>
-                <img src="/logo-header.png" alt="Mobirelli" style={{ height: 34, width: "auto", maxWidth: "none", objectFit: "cover", objectPosition: "left" }} />
+              <div style={{ width: 38, height: 38, overflow: "hidden", flex: "none" }}>
+                <img src="/logo-header.png" alt="Mobirelli" style={{ height: 38, width: "auto", maxWidth: "none", objectFit: "cover", objectPosition: "left" }} />
               </div>
             ) : (
-              <img src="/logo-header.png" alt="Mobirelli" style={{ height: 40, width: "auto", objectFit: "contain" }} />
+              <img src="/logo-header.png" alt="Mobirelli" style={{ height: 45, width: "auto", objectFit: "contain" }} />
             )}
             {!menuRecolhido && (
               <PanelLeftClose size={16} strokeWidth={2.5} color="var(--rd-text-faint)" style={{ marginLeft: "auto" }} />
@@ -9848,8 +9848,8 @@ function AppAutenticado({ perfil, onSignOut }) {
                 borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
             >
               {tab === "rastreio" && <BorraProgressiva lado="topo" />}
-              <div style={{ width: 32, height: 32, overflow: "hidden", flex: "none", borderRadius: 9 }}>
-                <img src="/logo-header.png" alt="Mobirelli" style={{ height: 32, width: "auto", maxWidth: "none", objectFit: "cover", objectPosition: "left" }} />
+              <div style={{ width: 36, height: 36, overflow: "hidden", flex: "none", borderRadius: 9 }}>
+                <img src="/logo-header.png" alt="Mobirelli" style={{ height: 36, width: "auto", maxWidth: "none", objectFit: "cover", objectPosition: "left" }} />
               </div>
               <div className="flex flex-col" style={{ gap: 1, minWidth: 0 }}>
                 <span className="truncate" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>
