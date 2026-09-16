@@ -2540,9 +2540,13 @@ const TrackingMap = forwardRef(function TrackingMap(
         // a placa vem do rastreador do jeito que foi cadastrada lá ("UGH-2J93 - Honda"),
         // e no app ela é guardada sem traço — comparar cru fazia a moto não ser
         // reconhecida ("moto não cadastrada") e o mapa da ficha vir vazio
-        const devices = Object.values(data).filter((d) =>
-          filterPlaca ? placaLimpa((d.name || "").split(" - ")[0]) === placaLimpa(filterPlaca) : true
-        );
+        const devices = Object.values(data)
+          // a Melocaliza às vezes devolve uma entrada vazia (sem nome e sem posição);
+          // ela entrava na contagem da frota e aparecia como "moto não cadastrada"
+          .filter((d) => d && d.name && parseFloat(d.lat) && parseFloat(d.lng))
+          .filter((d) =>
+            filterPlaca ? placaLimpa((d.name || "").split(" - ")[0]) === placaLimpa(filterPlaca) : true
+          );
 
         const bounds = new maplibregl.LngLatBounds();
         const vistos = new Set();
@@ -7690,12 +7694,18 @@ const RASTREIO_STATUS_TOM = {
   offline: { cor: "var(--rd-negative)", fundo: "rgba(226,106,90,0.14)" },
 };
 
-// o horário do último sinal vem com nome diferente dependendo do rastreador —
-// tentamos os campos conhecidos e, se nenhum vier, a linha simplesmente não mostra
+// HORÁRIO DO ÚLTIMO SINAL. A Melocaliza manda duas coisas: "timestamp" (segundos
+// desde 1970) e "time" no formato brasileiro "15-09-2026 21:24:35". O segundo NÃO é
+// uma data válida pro new Date() (ele espera ano-mês-dia), então quem vale é o
+// timestamp; o texto só entra como reserva, já virado do avesso.
 const dataDoDevice = (d) => {
-  const bruto = d?.dt_tracker || d?.dt_server || d?.time || d?.timestamp || d?.last_update || "";
+  const ts = Number(d?.timestamp || d?.acktimestamp || 0);
+  if (ts > 0) return new Date(ts * 1000);
+  const bruto = d?.dt_tracker || d?.dt_server || d?.time || d?.last_update || "";
   if (!bruto) return null;
-  const data = new Date(String(bruto).replace(" ", "T"));
+  const texto = String(bruto).trim();
+  const br = texto.match(/^(\d{2})-(\d{2})-(\d{4})[ T](\d{2}:\d{2}(:\d{2})?)$/);
+  const data = new Date(br ? `${br[3]}-${br[2]}-${br[1]}T${br[4]}` : texto.replace(" ", "T"));
   return isNaN(data.getTime()) ? null : data;
 };
 
