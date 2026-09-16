@@ -22,6 +22,7 @@ import {
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
+  Check,
   Clock,
   Tag,
   Wrench,
@@ -162,7 +163,7 @@ const formatCompact = (v) => {
 };
 
 const formatDate = (d) => {
-  if (!d) return "—";
+  if (!d) return "";
   const [y, m, day] = d.split("-");
   return `${day}/${m}/${y}`;
 };
@@ -740,7 +741,7 @@ const monthLabel = (key) => {
 
 // "08/09/26" — data curta pro extrato da moto, onde a coluna é estreita
 const formatDateCurto = (d) => {
-  if (!d) return "—";
+  if (!d) return "";
   const [y, m, day] = d.split("-");
   return `${day}/${m}/${(y || "").slice(2)}`;
 };
@@ -813,7 +814,7 @@ const enderecoCompleto = (c) => {
   let logradouroNumero = c.logradouro && c.numero ? `${c.logradouro}, ${c.numero}` : c.logradouro;
   if (logradouroNumero && c.complemento) logradouroNumero += ` - ${c.complemento}`;
   return (
-    [logradouroNumero, c.bairro, c.cidade && c.estado ? `${c.cidade}/${c.estado}` : c.cidade].filter(Boolean).join(" — ") ||
+    [logradouroNumero, c.bairro, c.cidade && c.estado ? `${c.cidade}/${c.estado}` : c.cidade].filter(Boolean).join(" · ") ||
     "Endereço não informado"
   );
 };
@@ -1214,9 +1215,14 @@ const inputStyle = {
 // no index.css, porque só dá pra mexer nos pseudo-elementos -webkit- por CSS
 const dateInputStyle = { ...inputStyle, height: 41, lineHeight: "19px" };
 
-function SelectField({ value, onChange, options }) {
+function SelectField({ value, onChange, options, disabled }) {
   return (
-    <select style={{ ...inputStyle, appearance: "auto" }} value={value} onChange={onChange}>
+    <select
+      style={{ ...inputStyle, appearance: "auto", opacity: disabled ? 0.5 : 1 }}
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+    >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
@@ -1228,6 +1234,30 @@ function SelectField({ value, onChange, options }) {
 
 function Row2({ children }) {
   return <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: "var(--rd-s3)" }}>{children}</div>;
+}
+
+// checkbox com a cara do site (o quadradinho padrão do navegador destoava do resto) —
+// input real fica invisível por cima só pra manter clique/teclado acessíveis
+function Checkbox({ checked, onChange, children }) {
+  return (
+    <label className="flex items-center gap-2 mb-3 text-sm cursor-pointer select-none" style={{ color: theme.text, fontFamily: "var(--rd-font)" }}>
+      <span className="relative flex items-center justify-center flex-shrink-0" style={{ width: 20, height: 20 }}>
+        <input type="checkbox" checked={checked} onChange={onChange} className="absolute inset-0 opacity-0 cursor-pointer" style={{ margin: 0 }} />
+        <span
+          className="flex items-center justify-center w-full h-full pointer-events-none"
+          style={{
+            borderRadius: 6,
+            background: checked ? theme.mint : "transparent",
+            border: `1.5px solid ${checked ? theme.mint : theme.outline}`,
+            transition: "background 0.15s, border-color 0.15s",
+          }}
+        >
+          {checked && <Check size={13} color={theme.mintText} strokeWidth={3} />}
+        </span>
+      </span>
+      {children}
+    </label>
+  );
 }
 
 /* ===========================================================
@@ -1242,7 +1272,7 @@ function AnexoField({ label, linkValue, storageKey, fileName, onChange }) {
     e.target.value = "";
     if (!file) return;
     if (file.size > 20 * 1024 * 1024) {
-      setStatus("Arquivo acima de 20MB — use o link do Drive acima para arquivos maiores.");
+      setStatus("Arquivo acima de 20MB. Use o link do Drive acima para arquivos maiores.");
       return;
     }
     setStatus("Enviando...");
@@ -1417,7 +1447,7 @@ function AnexoMultiField({ label, anexos, storageKey, onChange }) {
     const validos = files.filter((f) => f.size <= 20 * 1024 * 1024);
     const grandesDemais = files.length - validos.length;
     if (validos.length === 0) {
-      setStatus("Arquivo(s) acima de 20MB — use o link do Drive acima para arquivos maiores.");
+      setStatus("Arquivo(s) acima de 20MB. Use o link do Drive acima para arquivos maiores.");
       return;
     }
     setStatus(`Enviando ${validos.length > 1 ? `${validos.length} arquivos` : "arquivo"}...`);
@@ -1430,7 +1460,7 @@ function AnexoMultiField({ label, anexos, storageKey, onChange }) {
       }
       onChange([...lista, ...enviados]);
       if (enviados.length < validos.length || grandesDemais > 0) {
-        setStatus("Algum arquivo não pôde ser enviado — tente de novo ou use o link do Drive.");
+        setStatus("Algum arquivo não pôde ser enviado. Tente de novo ou use o link do Drive.");
       } else {
         setStatus("");
       }
@@ -1594,7 +1624,7 @@ function ClienteFormModal({ cliente, onClose, onSave, title }) {
       )}
       {cepStatus === "nao-encontrado" && (
         <div className="text-xs -mt-2 mb-3" style={{ color: theme.coral, fontFamily: BODY_FONT }}>
-          CEP não encontrado — preencha o endereço manualmente.
+          CEP não encontrado. Preencha o endereço manualmente.
         </div>
       )}
       <FieldLabel>Logradouro</FieldLabel>
@@ -1653,7 +1683,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
 
   if (motosDisponiveis.length === 0) {
     return (
-      <Modal title={`Vincular moto — ${cliente.nome || "cliente"}`} onClose={onClose}>
+      <Modal title={`Vincular moto · ${cliente.nome || "cliente"}`} onClose={onClose}>
         <div style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
           Nenhuma moto disponível agora. Cadastre uma moto nova ou encerre o contrato de alguma na aba Motos primeiro.
         </div>
@@ -1662,12 +1692,12 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
   }
 
   return (
-    <Modal title={`Vincular moto — ${cliente.nome || "cliente"}`} onClose={onClose}>
+    <Modal title={`Vincular moto · ${cliente.nome || "cliente"}`} onClose={onClose}>
       <FieldLabel>Moto disponível</FieldLabel>
       <SelectField
         value={motoId}
         onChange={(e) => setMotoId(e.target.value)}
-        options={motosDisponiveis.map((m) => ({ value: m.id, label: `${m.placa ? formatPlaca(m.placa) : "sem placa"} — ${m.modelo || "modelo?"}` }))}
+        options={motosDisponiveis.map((m) => ({ value: m.id, label: `${m.placa ? formatPlaca(m.placa) : "sem placa"} · ${m.modelo || "modelo?"}` }))}
       />
       <Row2>
         <div>
@@ -1699,7 +1729,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
       <FieldLabel>Data de término (opcional)</FieldLabel>
       <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
+        Se o aluguel tiver prazo definido, preenche aqui: a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
       <Row2>
         <div>
@@ -1938,7 +1968,7 @@ function ClienteDetalhe({
                       {pagoEsteMes
                         ? `${mesPorExtenso(mesAtualKey)} pago`
                         : vencido
-                        ? `Atrasado${diaVenc ? ` — venceu dia ${diaVenc}` : ""}`
+                        ? `Atrasado${diaVenc ? ` (venceu dia ${diaVenc})` : ""}`
                         : `${mesPorExtenso(mesAtualKey)} em aberto`}
                     </span>
                     {permissoes.podeEditar && (
@@ -1959,7 +1989,7 @@ function ClienteDetalhe({
                   <BlocoNumero rotulo="Mensalidade" valor={formatCurrency(mensalidade)} cor="var(--rd-attention-text)" />
                   <BlocoNumero
                     rotulo="Vencimento"
-                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : "—"}
+                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : ""}
                     detalhe={venc ? (venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`) : null}
                     cor={vencido ? "var(--rd-negative)" : undefined}
                   />
@@ -2012,7 +2042,7 @@ function ClienteDetalhe({
               <LinhaLegendaValor
                 cor="var(--rd-text-dim)"
                 rotulo="Último pagamento"
-                valor={pagamentos[0] ? formatDate(pagamentos[0].data) : "—"}
+                valor={pagamentos[0] ? formatDate(pagamentos[0].data) : ""}
               />
             </div>
           </CartaoDetalhe>
@@ -2020,7 +2050,7 @@ function ClienteDetalhe({
           <CartaoDetalhe titulo="Motos anteriores">
             {anteriores.length === 0 ? (
               <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
-                {moto ? `Nenhuma — a ${formatPlaca(moto.placa)} é a primeira moto desse cliente.` : "Esse cliente ainda não teve nenhuma moto."}
+                {moto ? `Nenhuma. A ${formatPlaca(moto.placa)} é a primeira moto desse cliente.` : "Esse cliente ainda não teve nenhuma moto."}
               </div>
             ) : (
               anteriores.map((h, i) => (
@@ -2040,13 +2070,13 @@ function ClienteDetalhe({
 
           <CartaoDetalhe cresce titulo="Ficha e contato">
             <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
-              <CampoFicha rotulo="CPF/CNPJ" valor={cliente.cpfCnpj || "—"} />
-              <CampoFicha rotulo="Telefone" valor={cliente.telefone || "—"} />
-              <CampoFicha rotulo="E-mail" valor={cliente.email || "—"} />
-              <CampoFicha rotulo="CEP" valor={cliente.cep || "—"} />
+              <CampoFicha rotulo="CPF/CNPJ" valor={cliente.cpfCnpj || "não informado"} />
+              <CampoFicha rotulo="Telefone" valor={cliente.telefone || "não informado"} />
+              <CampoFicha rotulo="E-mail" valor={cliente.email || "não informado"} />
+              <CampoFicha rotulo="CEP" valor={cliente.cep || "não informado"} />
             </div>
             <div style={{ marginTop: "var(--rd-s3)" }}>
-              <CampoFicha rotulo="Endereço" valor={enderecoCompleto(cliente) || "—"} />
+              <CampoFicha rotulo="Endereço" valor={enderecoCompleto(cliente) || "não informado"} />
             </div>
             {cliente.observacoes && (
               <div style={{ marginTop: "var(--rd-s3)", fontSize: 12, color: "var(--rd-text-muted)" }}>{cliente.observacoes}</div>
@@ -2056,7 +2086,7 @@ function ClienteDetalhe({
                 {anexos.map((a, i) => (
                   <button
                     key={i}
-                    onClick={() => onPreview({ url: a.link || a, title: `Contrato — ${formatPlaca(moto.placa)}` })}
+                    onClick={() => onPreview({ url: a.link || a, title: `Contrato · ${formatPlaca(moto.placa)}` })}
                     className="flex items-center mbr-hover-grow"
                     style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
                   >
@@ -2220,13 +2250,13 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos, lancamen
               >
                 <div className="flex flex-col min-w-0" style={{ gap: 4 }}>
                   <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
-                  <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{[c.cidade, c.estado].filter(Boolean).join("/") || "—"}</span>
+                  <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{[c.cidade, c.estado].filter(Boolean).join("/") || ""}</span>
                 </div>
                 <span className="truncate" style={{ minWidth: 0, fontFamily: "ui-monospace, monospace", fontSize: 12.5, color: "var(--rd-text-muted)" }}>
-                  {c.cpfCnpj || "—"}
+                  {c.cpfCnpj || ""}
                 </span>
                 <div className="flex flex-col min-w-0" style={{ gap: 4 }}>
-                  <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>{c.telefone || "—"}</span>
+                  <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>{c.telefone || ""}</span>
                   <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{c.email || ""}</span>
                 </div>
                 {motoVinculada ? (
@@ -3011,7 +3041,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
 
   return (
     <Modal
-      title={editando ? `Editar contrato — ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}` : `Novo contrato — ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}`}
+      title={editando ? `Editar contrato · ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}` : `Novo contrato · ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}`}
       onClose={onClose}
     >
       {editando ? (
@@ -3075,7 +3105,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
           )}
           {cepStatus === "nao-encontrado" && (
             <div className="text-xs -mt-2 mb-3" style={{ color: theme.coral, fontFamily: BODY_FONT }}>
-              CEP não encontrado — preencha o endereço manualmente.
+              CEP não encontrado. Preencha o endereço manualmente.
             </div>
           )}
           <FieldLabel>Logradouro</FieldLabel>
@@ -3143,7 +3173,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
       <FieldLabel>Data de término (opcional)</FieldLabel>
       <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
+        Se o aluguel tiver prazo definido, preenche aqui: a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
       <Row2>
         <div>
@@ -3231,10 +3261,9 @@ function ManutencaoModal({ onClose, onSave }) {
           <input style={inputStyle} value={form.local} onChange={set("local")} />
         </div>
       </Row2>
-      <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-        <input type="checkbox" checked={form.garantia} onChange={(e) => setForm({ ...form, garantia: e.target.checked })} />
+      <Checkbox checked={form.garantia} onChange={(e) => setForm({ ...form, garantia: e.target.checked })}>
         Coberto por garantia
-      </label>
+      </Checkbox>
       <button
         onClick={() => onSave({ ...form, valorGasto: Number(form.valorGasto) || 0 })}
         className="w-full rounded-xl py-2 font-semibold mt-1"
@@ -3842,7 +3871,7 @@ function MotoDetalhe({
                       {pagoEsteMes
                         ? `${mesPorExtenso(mesAtualKey)} pago`
                         : vencido
-                        ? `Atrasado${diaVenc ? ` — venceu dia ${diaVenc}` : ""}`
+                        ? `Atrasado${diaVenc ? ` (venceu dia ${diaVenc})` : ""}`
                         : cobraEsteMes
                         ? `${mesPorExtenso(mesAtualKey)} em aberto`
                         : `1ª cobrança em ${monthLabel((primeiraCobrancaDoContrato(moto.contratoAtual) || "").slice(0, 7))}`}
@@ -3875,7 +3904,7 @@ function MotoDetalhe({
                   <BlocoNumero rotulo="Mensalidade" valor={formatCurrency(mensalidade)} cor="var(--rd-attention-text)" />
                   <BlocoNumero
                     rotulo="Vencimento"
-                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : "—"}
+                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : ""}
                     detalhe={venc ? (venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`) : null}
                     cor={vencido ? "var(--rd-negative)" : undefined}
                   />
@@ -3937,7 +3966,7 @@ function MotoDetalhe({
           <CartaoDetalhe titulo="Clientes anteriores">
             {anteriores.length === 0 ? (
               <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
-                {cliente ? `Nenhum — ${cliente.nome} é o primeiro cliente dessa moto.` : "Essa moto ainda não teve contrato."}
+                {cliente ? `Nenhum. ${cliente.nome} é o primeiro cliente dessa moto.` : "Essa moto ainda não teve contrato."}
               </div>
             ) : (
               anteriores.map((h, i) => {
@@ -3964,9 +3993,9 @@ function MotoDetalhe({
 
           <CartaoDetalhe cresce titulo="Ficha e documentos">
             <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
-              <CampoFicha rotulo="Chassi" valor={moto.chassi || "—"} />
-              <CampoFicha rotulo="Renavam" valor={moto.renavam || "—"} />
-              <CampoFicha rotulo="Comprada em" valor={moto.dataCompra ? formatDate(moto.dataCompra) : "—"} />
+              <CampoFicha rotulo="Chassi" valor={moto.chassi || "não informado"} />
+              <CampoFicha rotulo="Renavam" valor={moto.renavam || "não informado"} />
+              <CampoFicha rotulo="Comprada em" valor={moto.dataCompra ? formatDate(moto.dataCompra) : "não informado"} />
               <CampoFicha rotulo="Valor de compra" valor={formatCurrency(moto.valorCompra || 0)} />
             </div>
             {documentos.length > 0 && (
@@ -3974,7 +4003,7 @@ function MotoDetalhe({
                 {documentos.map((d, i) => (
                   <button
                     key={`${d.titulo}-${i}`}
-                    onClick={() => onPreview({ url: d.url, title: `${d.titulo} — ${formatPlaca(moto.placa)}` })}
+                    onClick={() => onPreview({ url: d.url, title: `${d.titulo} · ${formatPlaca(moto.placa)}` })}
                     className="flex items-center mbr-hover-grow"
                     style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
                   >
@@ -4095,7 +4124,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
       natureza: "Manutenção",
       categoria: manutencao.tipo || "Manutenção",
       valor: manutencao.valorGasto,
-      descricao: descricaoPartes.join(" — "),
+      descricao: descricaoPartes.join(" · "),
       forma: "",
       motoId: moto.id,
       parcelas: 1,
@@ -4474,19 +4503,19 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                   )}
                 </div>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>
-                  {moto.contratoAtual ? formatCurrencyCurto(moto.contratoAtual.valorMensal) : "—"}
+                  {moto.contratoAtual ? formatCurrencyCurto(moto.contratoAtual.valorMensal) : ""}
                 </span>
                 {moto.contratoAtual ? (
                   <div className="flex flex-col" style={{ gap: 2 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: vencido ? "var(--rd-negative)" : "var(--rd-text)" }}>
-                      {venc ? venc.data : diaVenc ? `dia ${diaVenc}` : "—"}
+                      {venc ? venc.data : diaVenc ? `dia ${diaVenc}` : ""}
                     </span>
                     <span style={{ fontSize: 11.5, color: vencido ? "var(--rd-negative)" : "var(--rd-text-dim)" }}>
                       {vencido ? "atrasado" : !venc ? "sem data" : venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`}
                     </span>
                   </div>
                 ) : (
-                  <span style={{ fontSize: 13, color: "var(--rd-text-dim)" }}>—</span>
+                  <span style={{ fontSize: 13, color: "var(--rd-text-dim)" }} />
                 )}
                 <div className="flex items-center" style={{ gap: 10, minWidth: 0 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -4497,7 +4526,7 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
                 <div className="flex items-center mbr-col-extra" style={{ gap: 7, minWidth: 0 }}>
                   <span style={{ width: 7, height: 7, borderRadius: 999, background: parada ? "var(--rd-attention)" : "var(--rd-positive)", flex: "none" }} />
                   <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
-                    {parada ? "Pátio" : [cliente?.cidade, cliente?.estado].filter(Boolean).join("/") || "—"}
+                    {parada ? "Pátio" : [cliente?.cidade, cliente?.estado].filter(Boolean).join("/") || ""}
                   </span>
                 </div>
                 <span style={{ fontSize: 12.5, fontWeight: 700, color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)", justifySelf: "end" }}>
@@ -4642,7 +4671,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
             onChange={(e) => selecionarMoto(e.target.value)}
             options={[
               { value: "", label: "Escolha a moto..." },
-              ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+              ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
             ]}
           />
           <div
@@ -4651,10 +4680,10 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
           >
             {ehManutencao
               ? form.motoId
-                ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
+                ? "Vai aparecer na ficha dessa moto, em Manutenções, além de entrar aqui no caixa."
                 : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."
               : form.motoId
-                ? "Baixa o aluguel dessa moto no mês da data abaixo — ela sai de \"pagamento atrasado\" na aba Motos e na agenda de cobranças."
+                ? "Baixa o aluguel dessa moto no mês da data abaixo. Ela sai de \"pagamento atrasado\" na aba Motos e na agenda de cobranças."
                 : "Escolha a moto pra esse pagamento baixar o aluguel dela. Sem moto, ela continua marcada como \"pagamento atrasado\"."}
           </div>
         </>
@@ -4709,14 +4738,25 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
               <SelectField
                 value={form.motoId || ""}
                 onChange={(e) => selecionarMoto(e.target.value)}
+                disabled={form.aplicarTodas}
                 options={[
                   { value: "", label: "Nenhuma / não é de uma moto específica" },
-                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
                 ]}
               />
-              <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Use pra mensalidade, manutenção, combustível, despachante — qualquer gasto ou receita de uma moto específica.
-              </div>
+              {!editando && (motos || []).length > 0 && (
+                <Checkbox
+                  checked={!!form.aplicarTodas}
+                  onChange={(e) => setForm({ ...form, aplicarTodas: e.target.checked, motoId: e.target.checked ? "" : form.motoId })}
+                >
+                  Aplicar a todas as motos ({motos.length})
+                </Checkbox>
+              )}
+              {form.aplicarTodas && Number(form.valor) > 0 && (
+                <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                  {formatCurrency(Number(form.valor))} × {motos.length} = {formatCurrency(Number(form.valor) * motos.length)}
+                </div>
+              )}
             </>
           )}
           <FieldLabel>Forma de pagamento (opcional)</FieldLabel>
@@ -4732,7 +4772,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
           {Number(form.parcelas) > 1 && (
             <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
               {Number(form.parcelas) > (lancamento?.parcelasTotal || 1)
-                ? `Esse lançamento entra como a 1ª parcela — as outras ${Number(form.parcelas) - (lancamento?.parcelasTotal || 1)} entram automaticamente em "Contas futuras", uma por mês.`
+                ? `Esse lançamento entra como a 1ª parcela. As outras ${Number(form.parcelas) - (lancamento?.parcelasTotal || 1)} entram automaticamente em "Contas futuras", uma por mês.`
                 : `Marcado como parcela 1 de ${Number(form.parcelas)}.`}
             </div>
           )}
@@ -4743,7 +4783,16 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
 
       <div className="flex gap-2">
         <button
-          onClick={() => onSave({ ...form, valor: Number(form.valor) || 0 })}
+          onClick={() => {
+            const { aplicarTodas, ...base } = form;
+            const valorUnitario = Number(form.valor) || 0;
+            const aplicaATodas = aplicarTodas && (motos || []).length > 0;
+            onSave(
+              aplicaATodas
+                ? { ...base, motoId: "", valor: valorUnitario * motos.length, valorUnitario, qtdMotos: motos.length }
+                : { ...base, valor: valorUnitario, valorUnitario: undefined, qtdMotos: undefined }
+            );
+          }}
           className="flex-1 rounded-xl py-2 font-semibold mt-1"
           style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
         >
@@ -4823,6 +4872,19 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   // uma parcela já existente não vira um novo carnê ao ser reaberta
   const jaEhParcela = Number(futuro?.parcelasTotal) > 1;
 
+  // "Todo mês" com mais de um dia de vencimento (empréstimo pago dia 1 e dia 15, por
+  // exemplo) — cada dia extra vira sua própria conta recorrente, todas compartilhando
+  // grupoDias pra aparecerem juntas numa linha só na lista, em vez de precisar cadastrar
+  // duas contas iguais separadas
+  const diaPrincipal = Number((form.vencimento || todayISO()).slice(8, 10)) || 1;
+  const [diasExtras, setDiasExtras] = useState([]);
+  const [novoDia, setNovoDia] = useState("");
+  const adicionarDia = () => {
+    const d = Math.max(1, Math.min(31, Number(novoDia) || 0));
+    if (d && d !== diaPrincipal && !diasExtras.includes(d)) setDiasExtras([...diasExtras, d].sort((a, b) => a - b));
+    setNovoDia("");
+  };
+
   // igual ao modal de lançamento: o formulário abre curto e o resto fica atrás de "Mais
   // opções" — já aberto se a conta que está sendo editada usa algum desses campos
   const [maisOpcoes, setMaisOpcoes] = useState(
@@ -4856,7 +4918,20 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
       });
     };
 
-    const alvos = [comNome];
+    const diasParaGerar = modo === "mensal" && diasExtras.length > 0 ? [diaPrincipal, ...diasExtras] : null;
+    const alvos = diasParaGerar
+      ? (() => {
+          const grupo = uid();
+          const [ano, mes] = (comNome.vencimento || todayISO()).split("-");
+          return diasParaGerar.map((dia, i) => ({
+            ...comNome,
+            id: i === 0 ? comNome.id : uid(),
+            vencimento: `${ano}-${mes}-${String(dia).padStart(2, "0")}`,
+            diaVencimento: dia,
+            grupoDias: grupo,
+          }));
+        })()
+      : [comNome];
 
     const deveParcelar = modo === "parcelado" && nParcelas > 1 && !jaEhParcela;
     onSave(deveParcelar ? alvos.flatMap(gerarParcelas) : alvos);
@@ -4938,21 +5013,60 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
           />
           <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
             {jaEhParcela
-              ? `Essa é a parcela ${futuro.parcelaAtual || 1} de ${futuro.parcelasTotal} — pra mudar o parcelamento, apague as parcelas e cadastre de novo.`
+              ? `Essa é a parcela ${futuro.parcelaAtual || 1} de ${futuro.parcelasTotal}. Pra mudar o parcelamento, apague as parcelas e cadastre de novo.`
               : `${nParcelas}x de ${formatCurrency(valorNum)} = ${formatCurrency(valorNum * nParcelas)} no total. Entra uma conta por mês a partir do 1º vencimento.`}
           </div>
         </>
       )}
       {modo === "mensal" && (
         <div className="text-xs -mt-1 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Se repete pra sempre, todo mês no mesmo dia — você confirma mês a mês.
+          Se repete todo mês, sempre no mesmo dia.
         </div>
       )}
+      {modo === "mensal" && !editando && (
+        <>
+          <FieldLabel>Também vence no dia (opcional)</FieldLabel>
+          {diasExtras.length > 0 && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {diasExtras.map((d) => (
+                <span
+                  key={d}
+                  className="flex items-center gap-1.5 text-xs font-semibold rounded-full pl-3 pr-2 py-1.5"
+                  style={{ background: theme.card2, color: theme.text }}
+                >
+                  Dia {d}
+                  <button type="button" onClick={() => setDiasExtras(diasExtras.filter((x) => x !== d))} style={{ color: theme.textMuted, display: "flex" }}>
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2 mb-3">
+            <input
+              type="number"
+              min="1"
+              max="31"
+              style={inputStyle}
+              value={novoDia}
+              onChange={(e) => setNovoDia(e.target.value)}
+              placeholder="Ex.: 15"
+            />
+            <button
+              type="button"
+              onClick={adicionarDia}
+              className="rounded-xl px-4 text-sm font-semibold flex-shrink-0"
+              style={{ border: `1px solid ${theme.cardBorder}`, color: theme.mint }}
+            >
+              Adicionar
+            </button>
+          </div>
+        </>
+      )}
       {modo === "unica" && (
-        <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-          <input type="checkbox" checked={form.pago} onChange={(e) => setForm({ ...form, pago: e.target.checked })} />
+        <Checkbox checked={form.pago} onChange={(e) => setForm({ ...form, pago: e.target.checked })}>
           {isEntrada ? "Já foi recebido" : "Já foi pago"}
-        </label>
+        </Checkbox>
       )}
 
       {!maisOpcoes ? (
@@ -4978,30 +5092,21 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
                 onChange={(e) => setForm({ ...form, motoId: e.target.value })}
                 options={[
                   { value: "", label: "Nenhuma / não é de uma moto específica" },
-                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
                 ]}
               />
-              {/* rastreador, seguro por moto e afins: uma conta só, com o valor POR MOTO,
-                  que se multiplica sozinha pelo tamanho da frota — em vez de cadastrar
-                  uma conta igual pra cada moto e ter que mexer em todas quando entra ou
-                  sai uma moto */}
-              <label className="flex items-start gap-2 mb-2 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-                <input
-                  type="checkbox"
-                  checked={!!form.porMoto}
-                  onChange={(e) => setForm({ ...form, porMoto: e.target.checked, motoId: e.target.checked ? "" : form.motoId })}
-                  style={{ marginTop: 3 }}
-                />
-                <span>
-                  É por moto — o valor acima vale pra cada moto da frota
-                  {form.porMoto && (motos || []).length > 0 && (
-                    <b style={{ color: theme.mint }}>
-                      {" "}
-                      = {formatCurrency(valorNum * motos.length)} ({motos.length} moto{motos.length === 1 ? "" : "s"})
-                    </b>
-                  )}
-                </span>
-              </label>
+              <Checkbox
+                checked={!!form.porMoto}
+                onChange={(e) => setForm({ ...form, porMoto: e.target.checked, motoId: e.target.checked ? "" : form.motoId })}
+              >
+                Por moto
+                {form.porMoto && (motos || []).length > 0 && (
+                  <b style={{ color: theme.mint }}>
+                    {" "}
+                    = {formatCurrency(valorNum * motos.length)} ({motos.length} moto{motos.length === 1 ? "" : "s"})
+                  </b>
+                )}
+              </Checkbox>
               {form.porMoto && (
                 <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
                   Quando entrar ou sair moto da frota, essa conta se ajusta sozinha.
@@ -5137,7 +5242,13 @@ const FuturosView = forwardRef(function FuturosView(
     if (!alvo) return;
     const rotulo = `${nomeDoFuturo(alvo)} · ${formatCurrency(alvo.valor)}`;
     const quantas = alvo.grupoParcelas ? futuros.filter((x) => x.grupoParcelas === alvo.grupoParcelas).length : 0;
-    const aviso = quantas > 1 ? ` (essa é 1 das ${quantas} parcelas; as outras continuam)` : "";
+    const quantosDias = alvo.grupoDias ? futuros.filter((x) => x.grupoDias === alvo.grupoDias).length : 0;
+    const aviso =
+      quantas > 1
+        ? ` (essa é 1 das ${quantas} parcelas; as outras continuam)`
+        : quantosDias > 1
+          ? ` (essa é 1 dos ${quantosDias} dias de vencimento; os outros continuam)`
+          : "";
     if (!window.confirm(`Excluir a conta futura "${rotulo}"${aviso}?`)) return;
     await persist(futuros.filter((x) => x.id !== id));
     onExcluido?.(alvo, rotulo);
@@ -5643,7 +5754,12 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       ? placas.length > 0
         ? [...placas.slice(0, 3), ...(placas.length > 3 ? [`+${placas.length - 3}`] : [])].join(" · ")
         : `${itens.length} lançamentos iguais`
-      : [moto ? formatPlaca(moto.placa) : "", primeiro.parcelasTotal > 1 ? `parcela ${primeiro.parcelaAtual || 1}/${primeiro.parcelasTotal}` : "", primeiro.descricao || ""]
+      : [
+          moto ? formatPlaca(moto.placa) : "",
+          primeiro.parcelasTotal > 1 ? `parcela ${primeiro.parcelaAtual || 1}/${primeiro.parcelasTotal}` : "",
+          primeiro.qtdMotos > 1 ? `${formatCurrency(primeiro.valorUnitario)} por moto × ${primeiro.qtdMotos}` : "",
+          primeiro.descricao || "",
+        ]
           .filter(Boolean)
           .join(" · ");
     const mesCurto = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number((primeiro.data || "").slice(5, 7)) - 1] || "";
@@ -7709,7 +7825,7 @@ const localDoDevice = (d) => {
 const kmDoDevice = (d) => {
   const v = d?.distance ?? d?.today_distance ?? d?.odometer_today;
   const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? `${Math.round(n)} km` : "—";
+  return Number.isFinite(n) && n > 0 ? `${Math.round(n)} km` : "";
 };
 
 function ChipStatus({ status, pequeno }) {
@@ -7842,7 +7958,7 @@ function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirM
           {contagem.semMoto > 0 && (
             <span
               className="flex items-center"
-              title="Rastreador que não bate com nenhuma placa cadastrada na Frota — confira a placa lá na Melocaliza ou cadastre a moto"
+              title="Rastreador que não bate com nenhuma placa cadastrada na Frota. Confira a placa lá na Melocaliza ou cadastre a moto"
               style={{ gap: 7, color: "var(--rd-text-dim)", fontWeight: 600 }}
             >
               <AlertTriangle size={13} />
@@ -8058,7 +8174,7 @@ function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirM
               <div className="mbr-rastreio-stats" style={{ marginBottom: 10 }}>
                 {[
                   { rotulo: "Velocidade", valor: `${escolhida.velocidade} km/h` },
-                  { rotulo: "Último sinal", valor: escolhida.quando || "—" },
+                  { rotulo: "Último sinal", valor: escolhida.quando || "" },
                   { rotulo: "Rodou hoje", valor: kmDoDevice(escolhida.device) },
                 ].map((n) => (
                   <div key={n.rotulo}>
@@ -8207,7 +8323,7 @@ function NovoUsuarioModal({ onClose, onSaved }) {
       return;
     }
     if (pareceEmail) {
-      setErro("O usuário não pode ser um email — use só um nome ou apelido, sem @.");
+      setErro("O usuário não pode ser um email. Use só um nome ou apelido, sem @.");
       return;
     }
     if (senha !== confirmar) {
@@ -8231,7 +8347,7 @@ function NovoUsuarioModal({ onClose, onSaved }) {
       <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
       {pareceEmail && (
         <div className="text-xs mb-3 -mt-2 flex items-center gap-1" style={{ color: theme.amber, fontFamily: BODY_FONT }}>
-          <AlertTriangle size={13} /> Isso parece um email — use só um nome ou apelido, sem @.
+          <AlertTriangle size={13} /> Isso parece um email. Use só um nome ou apelido, sem @.
         </div>
       )}
       <CampoSenha label="Senha (mínimo 6 caracteres)" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
@@ -8282,7 +8398,7 @@ function RedefinirSenhaModal({ usuario, onClose, onSaved }) {
   };
 
   return (
-    <Modal title={`Redefinir senha — ${usuario.username}`} onClose={onClose}>
+    <Modal title={`Redefinir senha · ${usuario.username}`} onClose={onClose}>
       <CampoSenha label="Nova senha (mínimo 6 caracteres)" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
       <CampoSenha label="Confirmar nova senha" value={confirmar} onChange={(e) => setConfirmar(e.target.value)} autoComplete="new-password" />
       {erro && (
@@ -8776,7 +8892,7 @@ function CriarAdminView() {
           Criar administrador
         </h2>
         <div className="text-center text-xs mb-4" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Primeiro acesso ao sistema — essa conta vira a administradora. As próximas pessoas só entram com um login criado por ela.
+          Primeiro acesso ao sistema. Essa conta vira a administradora. As próximas pessoas só entram com um login criado por ela.
         </div>
         <FieldLabel>Usuário</FieldLabel>
         <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
