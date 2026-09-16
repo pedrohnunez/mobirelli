@@ -1211,11 +1211,6 @@ const inputStyle = {
   marginBottom: 14,
 };
 
-// o input de data fica do tamanho de um input de texto comum — o resto do trabalho
-// (desligar a aparência nativa do Safari, que desenha um controle bem mais alto) está
-// no index.css, porque só dá pra mexer nos pseudo-elementos -webkit- por CSS
-const dateInputStyle = { ...inputStyle, height: 41, lineHeight: "19px" };
-
 function SelectField({ value, onChange, options, disabled }) {
   return (
     <select
@@ -1258,6 +1253,172 @@ function Checkbox({ checked, onChange, children }) {
       </span>
       {children}
     </label>
+  );
+}
+
+const DIAS_SEMANA_ABREV = ["D", "S", "T", "Q", "Q", "S", "S"];
+
+// calendário com a cara do site no lugar do calendário branco nativo do navegador —
+// mesmo padrão de popover do ValorComDetalhe (portal + position:fixed calculado do
+// gatilho, pra escapar de qualquer contexto de empilhamento do modal/card por cima).
+//
+// "recorrente" liga o modo de conta "Todo mês": em vez de trocar a data (um dia certo,
+// num mês certo), cada clique liga/desliga aquele DIA DO MÊS como mais um vencimento
+// (diasExtras) — o próprio dia de "value" nunca sai da seleção por aqui.
+function CampoData({ value, onChange, placeholder, recorrente, diasExtras, onToggleDiaExtra, limpavel }) {
+  const [aberto, setAberto] = useState(false);
+  const [pos, setPos] = useState(null);
+  const gatilhoRef = useRef(null);
+  const [grade, setGrade] = useState(() => {
+    const [a, m] = (value || todayISO()).split("-").map(Number);
+    return { ano: a, mes: m };
+  });
+
+  useEffect(() => {
+    if (!value) return;
+    const [a, m] = value.split("-").map(Number);
+    setGrade({ ano: a, mes: m });
+  }, [value]);
+
+  const abrir = () => {
+    const r = gatilhoRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const largura = Math.min(272, window.innerWidth - 16);
+    setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - largura - 8)), largura });
+    setAberto(true);
+  };
+  const fechar = () => setAberto(false);
+
+  useEffect(() => {
+    if (!aberto) return;
+    const onScroll = () => fechar();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [aberto]);
+
+  const diaPrincipal = value ? Number(value.slice(8, 10)) : null;
+  const anoMesValue = value ? value.slice(0, 7) : null;
+  const mesGradeKey = `${grade.ano}-${String(grade.mes).padStart(2, "0")}`;
+
+  const selecionarDia = (dia) => {
+    if (recorrente) {
+      if (dia !== diaPrincipal) onToggleDiaExtra(dia);
+      return;
+    }
+    onChange({ target: { value: `${mesGradeKey}-${String(dia).padStart(2, "0")}` } });
+    setAberto(false);
+  };
+
+  const mudarMes = (delta) => {
+    setGrade((g) => {
+      let mes = g.mes + delta;
+      let ano = g.ano;
+      if (mes > 12) { mes = 1; ano++; }
+      if (mes < 1) { mes = 12; ano--; }
+      return { ano, mes };
+    });
+  };
+
+  const primeiroDiaSemana = new Date(grade.ano, grade.mes - 1, 1).getDay();
+  const diasNoMes = new Date(grade.ano, grade.mes, 0).getDate();
+  const celulas = [...Array(primeiroDiaSemana).fill(null), ...Array.from({ length: diasNoMes }, (_, i) => i + 1)];
+
+  const rotulo = value
+    ? recorrente && diasExtras?.length > 0
+      ? `Dias ${[diaPrincipal, ...diasExtras].sort((a, b) => a - b).join(" e ")}`
+      : formatDate(value)
+    : placeholder || "Escolher data";
+
+  return (
+    <div ref={gatilhoRef} className="relative" style={{ marginBottom: 14 }}>
+      <button
+        type="button"
+        onClick={() => (aberto ? fechar() : abrir())}
+        className="flex items-center justify-between w-full"
+        style={{ ...inputStyle, marginBottom: 0, paddingRight: limpavel && value ? 34 : undefined }}
+      >
+        <span style={{ color: value ? "var(--rd-text)" : "var(--rd-text-dim)" }}>{rotulo}</span>
+        <CalendarClock size={15} color="var(--rd-text-dim)" style={{ flexShrink: 0 }} />
+      </button>
+      {limpavel && value && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange({ target: { value: "" } });
+          }}
+          className="absolute flex items-center justify-center"
+          style={{ right: 30, top: 8, width: 22, height: 22, color: "var(--rd-text-faint)" }}
+        >
+          <X size={14} />
+        </button>
+      )}
+      {aberto && pos && createPortal(
+        <>
+          <div className="fixed inset-0" style={{ zIndex: 999 }} onClick={fechar} />
+          <div
+            className="fixed rounded-2xl mbr-fade-in"
+            style={{
+              top: pos.top,
+              left: pos.left,
+              zIndex: 1000,
+              width: pos.largura,
+              background: "var(--rd-surface)",
+              border: "1px solid var(--rd-border)",
+              boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+              padding: 14,
+            }}
+          >
+            <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+              <button type="button" onClick={() => mudarMes(-1)} className="flex items-center justify-center" style={{ color: "var(--rd-text-muted)", width: 26, height: 26 }}>
+                <ChevronLeft size={16} />
+              </button>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>
+                {mesPorExtenso(mesGradeKey)} de {grade.ano}
+              </span>
+              <button type="button" onClick={() => mudarMes(1)} className="flex items-center justify-center" style={{ color: "var(--rd-text-muted)", width: 26, height: 26 }}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+            <div className="grid grid-cols-7" style={{ gap: 2, marginBottom: 4 }}>
+              {DIAS_SEMANA_ABREV.map((d, i) => (
+                <div key={i} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: "var(--rd-text-faint)" }}>{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7" style={{ gap: 2 }}>
+              {celulas.map((dia, i) => {
+                if (!dia) return <div key={i} />;
+                const ehPrincipal = recorrente ? dia === diaPrincipal : mesGradeKey === anoMesValue && dia === diaPrincipal;
+                const ehExtra = recorrente && (diasExtras || []).includes(dia);
+                const selecionado = ehPrincipal || ehExtra;
+                return (
+                  <button
+                    type="button"
+                    key={i}
+                    onClick={() => selecionarDia(dia)}
+                    style={{
+                      aspectRatio: "1",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: selecionado ? 700 : 500,
+                      background: selecionado ? "var(--rd-brand-soft)" : "transparent",
+                      color: selecionado ? "var(--rd-shell)" : "var(--rd-text)",
+                    }}
+                  >
+                    {dia}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
+    </div>
   );
 }
 
@@ -1713,7 +1874,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
       <Row2>
         <div>
           <FieldLabel>Início</FieldLabel>
-          <input type="date" style={dateInputStyle} value={contrato.dataInicio} onChange={setC("dataInicio")} />
+          <CampoData value={contrato.dataInicio} onChange={setC("dataInicio")} />
         </div>
         <div>
           <FieldLabel>Dia de vencimento</FieldLabel>
@@ -1728,7 +1889,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
         </div>
       </Row2>
       <FieldLabel>Data de término (opcional)</FieldLabel>
-      <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
+      <CampoData value={contrato.dataTermino || ""} onChange={setC("dataTermino")} limpavel />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
         Se o aluguel tiver prazo definido, preenche aqui: a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
@@ -2938,7 +3099,7 @@ function MotoFormModal({ moto, onClose, onSave, title }) {
       <Row2>
         <div>
           <FieldLabel>Data da compra</FieldLabel>
-          <input type="date" style={dateInputStyle} value={form.dataCompra} onChange={set("dataCompra")} />
+          <CampoData value={form.dataCompra} onChange={set("dataCompra")} />
         </div>
         <div>
           <FieldLabel>Valor da compra</FieldLabel>
@@ -3157,7 +3318,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
       <Row2>
         <div>
           <FieldLabel>Início</FieldLabel>
-          <input type="date" style={dateInputStyle} value={contrato.dataInicio} onChange={setC("dataInicio")} />
+          <CampoData value={contrato.dataInicio} onChange={setC("dataInicio")} />
         </div>
         <div>
           <FieldLabel>Dia de vencimento</FieldLabel>
@@ -3172,7 +3333,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
         </div>
       </Row2>
       <FieldLabel>Data de término (opcional)</FieldLabel>
-      <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
+      <CampoData value={contrato.dataTermino || ""} onChange={setC("dataTermino")} limpavel />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
         Se o aluguel tiver prazo definido, preenche aqui: a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
@@ -3226,7 +3387,7 @@ function CustoExtraModal({ onClose, onSave }) {
   return (
     <Modal title="Novo custo da moto" onClose={onClose}>
       <FieldLabel>Data</FieldLabel>
-      <input type="date" style={dateInputStyle} value={form.data} onChange={set("data")} />
+      <CampoData value={form.data} onChange={set("data")} />
       <FieldLabel>Descrição</FieldLabel>
       <input style={inputStyle} value={form.descricao} onChange={set("descricao")} placeholder="Despachante, documentação, comissão..." />
       <FieldLabel>Valor gasto</FieldLabel>
@@ -3249,7 +3410,7 @@ function ManutencaoModal({ onClose, onSave }) {
   return (
     <Modal title="Nova manutenção" onClose={onClose}>
       <FieldLabel>Data</FieldLabel>
-      <input type="date" style={dateInputStyle} value={form.data} onChange={set("data")} />
+      <CampoData value={form.data} onChange={set("data")} />
       <FieldLabel>Tipo de manutenção</FieldLabel>
       <input style={inputStyle} value={form.tipo} onChange={set("tipo")} placeholder="Troca de óleo, pneu..." />
       <Row2>
@@ -4675,18 +4836,6 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
               ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
             ]}
           />
-          <div
-            className="text-xs -mt-2 mb-3"
-            style={{ color: form.motoId ? theme.textMuted : theme.amber, fontFamily: BODY_FONT }}
-          >
-            {ehManutencao
-              ? form.motoId
-                ? "Vai aparecer na ficha dessa moto, em Manutenções, além de entrar aqui no caixa."
-                : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."
-              : form.motoId
-                ? "Baixa o aluguel dessa moto no mês da data abaixo. Ela sai de \"pagamento atrasado\" na aba Motos e na agenda de cobranças."
-                : "Escolha a moto pra esse pagamento baixar o aluguel dela. Sem moto, ela continua marcada como \"pagamento atrasado\"."}
-          </div>
         </>
       )}
 
@@ -4716,7 +4865,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
         </div>
         <div>
           <FieldLabel>Data</FieldLabel>
-          <input type="date" style={dateInputStyle} value={form.data} onChange={set("data")} />
+          <CampoData value={form.data} onChange={set("data")} />
         </div>
       </Row2>
 
@@ -4741,7 +4890,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
                 onChange={(e) => selecionarMoto(e.target.value)}
                 disabled={form.aplicarTodas}
                 options={[
-                  { value: "", label: "Nenhuma / não é de uma moto específica" },
+                  { value: "", label: "Nenhuma" },
                   ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
                 ]}
               />
@@ -4879,12 +5028,6 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   // duas contas iguais separadas
   const diaPrincipal = Number((form.vencimento || todayISO()).slice(8, 10)) || 1;
   const [diasExtras, setDiasExtras] = useState([]);
-  const [novoDia, setNovoDia] = useState("");
-  const adicionarDia = () => {
-    const d = Math.max(1, Math.min(31, Number(novoDia) || 0));
-    if (d && d !== diaPrincipal && !diasExtras.includes(d)) setDiasExtras([...diasExtras, d].sort((a, b) => a - b));
-    setNovoDia("");
-  };
 
   // igual ao modal de lançamento: o formulário abre curto e o resto fica atrás de "Mais
   // opções" — já aberto se a conta que está sendo editada usa algum desses campos
@@ -4962,18 +5105,20 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
         onChange={set("nome")}
         placeholder={isEntrada ? "De onde vem esse dinheiro" : "Quem você paga / o que é"}
       />
-      <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        É esse texto que aparece na lista e vira o nome do lançamento quando você confirmar.
-      </div>
-
       <Row2>
         <div>
           <FieldLabel>{modo === "parcelado" ? "Valor da parcela (R$)" : "Valor (R$)"}</FieldLabel>
           <input type="number" step="0.01" style={inputStyle} value={form.valor} onChange={set("valor")} />
         </div>
         <div>
-          <FieldLabel>{modo === "unica" ? "Vencimento" : "1º vencimento"}</FieldLabel>
-          <input type="date" style={dateInputStyle} value={form.vencimento} onChange={set("vencimento")} />
+          <FieldLabel>Vencimento</FieldLabel>
+          <CampoData
+            value={form.vencimento}
+            onChange={set("vencimento")}
+            recorrente={modo === "mensal" && !editando}
+            diasExtras={diasExtras}
+            onToggleDiaExtra={(dia) => setDiasExtras((prev) => (prev.includes(dia) ? prev.filter((d) => d !== dia) : [...prev, dia].sort((a, b) => a - b)))}
+          />
         </div>
       </Row2>
 
@@ -5019,50 +5164,10 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
           </div>
         </>
       )}
-      {modo === "mensal" && (
-        <div className="text-xs -mt-1 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Se repete todo mês, sempre no mesmo dia.
-        </div>
-      )}
       {modo === "mensal" && !editando && (
-        <>
-          <FieldLabel>Também vence no dia (opcional)</FieldLabel>
-          {diasExtras.length > 0 && (
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              {diasExtras.map((d) => (
-                <span
-                  key={d}
-                  className="flex items-center gap-1.5 text-xs font-semibold rounded-full pl-3 pr-2 py-1.5"
-                  style={{ background: theme.card2, color: theme.text }}
-                >
-                  Dia {d}
-                  <button type="button" onClick={() => setDiasExtras(diasExtras.filter((x) => x !== d))} style={{ color: theme.textMuted, display: "flex" }}>
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="flex gap-2 mb-3">
-            <input
-              type="number"
-              min="1"
-              max="31"
-              style={inputStyle}
-              value={novoDia}
-              onChange={(e) => setNovoDia(e.target.value)}
-              placeholder="Ex.: 15"
-            />
-            <button
-              type="button"
-              onClick={adicionarDia}
-              className="rounded-xl px-4 text-sm font-semibold flex-shrink-0"
-              style={{ border: `1px solid ${theme.cardBorder}`, color: theme.mint }}
-            >
-              Adicionar
-            </button>
-          </div>
-        </>
+        <div className="text-xs -mt-1 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+          Se repete todo mês. Toque em mais de um dia no calendário pra vencer mais de uma vez no mês.
+        </div>
       )}
       {modo === "unica" && (
         <Checkbox checked={form.pago} onChange={(e) => setForm({ ...form, pago: e.target.checked })}>
@@ -5092,7 +5197,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
                 value={form.motoId || ""}
                 onChange={(e) => setForm({ ...form, motoId: e.target.value })}
                 options={[
-                  { value: "", label: "Nenhuma / não é de uma moto específica" },
+                  { value: "", label: "Nenhuma" },
                   ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
                 ]}
               />
@@ -5307,21 +5412,21 @@ const FuturosView = forwardRef(function FuturosView(
         <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
           <div>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
-              Ainda entra
+              Entradas
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-positive)" }}>{formatCurrency(contas.aReceber)}</div>
           </div>
           <span className="mbr-oper" style={{ fontSize: 16, color: "var(--rd-text-faint)" }}>−</span>
           <div>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
-              Ainda sai
+              Saídas
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-negative)" }}>{formatCurrency(contas.aPagar)}</div>
           </div>
           <span className="mbr-oper" style={{ fontSize: 16, color: "var(--rd-text-faint)" }}>=</span>
           <div>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
-              Sobra até {fimDoMes}
+              Saldo até {fimDoMes}
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: sobra >= 0 ? "var(--rd-text)" : "var(--rd-negative)" }}>
               {formatCurrency(sobra)}
@@ -5354,7 +5459,7 @@ const FuturosView = forwardRef(function FuturosView(
       <div className="mbr-futuros-grid">
         <Coluna
           entrada
-          titulo="Vou receber"
+          titulo="Recebimentos"
           total={contas.aReceber}
           itens={contas.receber}
           vazio={`Nada pra receber em ${monthLabel(mes)}.`}
@@ -5371,7 +5476,7 @@ const FuturosView = forwardRef(function FuturosView(
         />
         <Coluna
           entrada={false}
-          titulo="Vou pagar"
+          titulo="Pagamentos"
           total={contas.aPagar}
           itens={contas.pagar}
           vazio={`Nenhuma conta em ${monthLabel(mes)}.`}
@@ -5973,15 +6078,6 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
               </button>
             ))}
           </div>
-          {view === "lancado" && permissoes.podeEditar && (
-            <button
-              onClick={() => setModal({ ...emptyLancamento(), tipo: "saida", natureza: "Manutenção" })}
-              className="flex items-center"
-              style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "8px 15px", fontSize: 12.5, fontWeight: 600 }}
-            >
-              <Wrench size={14} strokeWidth={2.5} /> Manutenção
-            </button>
-          )}
           {view === "lancado" && (
             <button
               onClick={exportarMes}
@@ -6131,7 +6227,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                     {itensFiltrados.length} lançamento{itensFiltrados.length === 1 ? "" : "s"}
                   </span>
                   <span className="flex items-center" style={{ gap: 8 }}>
-                    <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Soma do que está à vista</span>
+                    <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Total</span>
                     <span style={{ fontSize: 13.5, fontWeight: 700, color: somaVisivel >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
                       {formatCurrency(somaVisivel)}
                     </span>
@@ -6144,8 +6240,12 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
             <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
               {/* minHeight fixo: são 4 classificações possíveis no app, então o cartão tem
                   sempre a mesma altura — sem isso um mês com 2 tipos de gasto e outro com
-                  4 deixavam a coluna (e o vão embaixo da lista) de tamanhos diferentes */}
-              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)", minHeight: 188 }}>
+                  4 deixavam a coluna (e o vão embaixo da lista) de tamanhos diferentes.
+                  220 é o suficiente pras 4 linhas (rótulo + valor + barrinha) caberem
+                  inteiras, sem cortar a última — o resto da coluna (Últimos 6 meses,
+                  Atalhos, Ainda neste mês) só empilha embaixo, então a lista da esquerda
+                  (que estica sozinha) sempre termina na mesma linha que esses cartões */}
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)", minHeight: 220 }}>
                 <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Para onde foi</div>
                 {paraOndeFoi.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>Nenhuma saída em {monthLabel(mesVisivel)}.</div>
@@ -6204,6 +6304,8 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                       { label: "+ Receber mensalidade", base: { tipo: "entrada", natureza: "Operacional", categoria: "Mensalidade" }, destaque: true },
                       { label: "Lançar manutenção", base: { tipo: "saida", natureza: "Manutenção", categoria: "" } },
                       { label: "Pagar comissão", base: { tipo: "saida", natureza: "Operacional", categoria: "Comissão" } },
+                      { label: "Lançar combustível", base: { tipo: "saida", natureza: "Operacional", categoria: "Combustível" } },
+                      { label: "Pagar despachante", base: { tipo: "saida", natureza: "Expansão", categoria: "Despachante" } },
                     ].map((a) => (
                       <button
                         key={a.label}
@@ -6239,7 +6341,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                   className="flex items-center justify-between flex-wrap"
                   style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}
                 >
-                  <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Sobra prevista</span>
+                  <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Saldo previsto</span>
                   <span
                     style={{
                       fontSize: 13.5,
@@ -7603,7 +7705,7 @@ function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara
             <div className="flex flex-col" style={{ gap: 12, paddingTop: 4, borderTop: "1px solid var(--rd-border-soft)" }}>
               <div className="flex items-baseline flex-wrap" style={{ gap: 8, paddingTop: 10 }}>
                 <span style={RD_LABEL}>Payback</span>
-                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta de cada moto</span>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta pra cada moto se pagar</span>
               </div>
               <div className="flex flex-col" style={{ gap: 7 }}>
                 {/* só as 4 mais perto de se pagar — a lista inteira sozinha estourava a
