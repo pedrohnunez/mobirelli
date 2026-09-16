@@ -2520,7 +2520,7 @@ const TrackingMap = forwardRef(function TrackingMap(
     if (!mini) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     // atribuição ao OpenStreetMap/MapLibre é exigida pela licença dos dados do mapa —
     // "compact" mantém isso, só troca a faixa cheia por um botão discreto "i"
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
 
     // se a pessoa arrastar o mapa ou der zoom manualmente, para de seguir a moto —
     // "originalEvent" só existe quando o movimento veio de um gesto do usuário (mouse/touch/
@@ -8009,7 +8009,7 @@ function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirM
               <button
                 key={b.label}
                 onClick={b.acao}
-                className="flex items-center mbr-hover-grow"
+                className="flex items-center"
                 style={{
                   gap: 8,
                   borderRadius: 999,
@@ -8829,9 +8829,12 @@ function AppAutenticado({ perfil, onSignOut }) {
 
   useEffect(() => {
     const medir = () => {
+      // "??" e não "||": no desktop as duas barras ficam escondidas e a altura é 0 —
+      // com "||" o 0 caía no palpite inicial (64/76) e os controles do mapa subiam
+      // quase 80px do rodapé, como se a barra de navegação do celular estivesse lá
       setChromeHeights({
-        header: headerRef.current?.offsetHeight || 64,
-        nav: navRef.current?.offsetHeight || 76,
+        header: headerRef.current?.offsetHeight ?? 64,
+        nav: navRef.current?.offsetHeight ?? 76,
       });
     };
     medir();
@@ -9161,7 +9164,7 @@ function AppAutenticado({ perfil, onSignOut }) {
           .mbr-rastreio-ferramentas { top: 14px; }
         }
         /* o zoom e o "i" da atribuição sobem pra não cair em cima da legenda */
-        .mbr-rastreio .maplibregl-ctrl-bottom-right { bottom: calc(46px + var(--mbr-bottom-rastreio, 0px)); }
+        .mbr-rastreio .maplibregl-ctrl-bottom-right { bottom: calc(58px + var(--mbr-bottom-rastreio, 0px)); }
 
         /* o pino da moto escolhida ganha um anel claro */
         .mbr-map-marker--ativo > div > div:first-child { box-shadow: 0 0 0 4px rgba(214, 232, 208, 0.55), 0 1px 3px rgba(0, 0, 0, 0.5) !important; }
