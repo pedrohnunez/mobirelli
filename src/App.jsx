@@ -1699,7 +1699,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
       <FieldLabel>Data de término (opcional)</FieldLabel>
       <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Futuros" soma só até essa data. Deixe em branco se for indefinido.
+        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
       <Row2>
         <div>
@@ -3143,7 +3143,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
       <FieldLabel>Data de término (opcional)</FieldLabel>
       <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Futuros" soma só até essa data. Deixe em branco se for indefinido.
+        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
       <Row2>
         <div>
@@ -5533,10 +5533,13 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     ]);
   };
 
+  // junta numa linha só os lançamentos de mesmo nome no mês. A comparação ignora
+  // acento, maiúscula e espaço repetido — "Comissão Rogério" e "Comissao Rogerio"
+  // são a mesma coisa pra quem lançou, e antes viravam duas linhas.
   const agruparLancamentos = (lista) => {
     const grupos = new Map();
     lista.forEach((l) => {
-      const chave = `${(l.categoria || "").trim().toLowerCase()}|${l.tipo}|${l._pendente ? 1 : 0}`;
+      const chave = `${semAcento((l.categoria || "").replace(/\s+/g, " ").trim())}|${l.tipo}`;
       if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
       grupos.get(chave).itens.push(l);
     });
@@ -5677,7 +5680,9 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
             </div>
             {sub && <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>{sub}</span>}
           </div>
-          {primeiro.natureza && (
+          {/* num grupo com classificações diferentes a etiqueta mentiria — aí ela some da
+              linha do grupo e aparece em cada linha de dentro */}
+          {primeiro.natureza && itens.every((x) => (x.natureza || "") === (primeiro.natureza || "")) && (
             <span
               className="mbr-col-extra flex-none"
               style={{
@@ -5761,27 +5766,6 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
   const podeAvancarMes = mesVisivel < mesLimite;
   const futurosViewRef = useRef(null);
 
-  const viewToggleRef = useRef(null);
-  const viewSlotRefs = useRef({});
-  const [viewPillRect, setViewPillRect] = useState(null);
-
-  // mesma pílula deslizante do menu de baixo, só que aqui entre "Lançado"/"Futuros" —
-  // mede a posição do botão ativo e anima a faixa verde até ali em vez de simplesmente
-  // trocar o fundo do botão na hora
-  useEffect(() => {
-    const medir = () => {
-      const slot = viewSlotRefs.current[view];
-      const container = viewToggleRef.current;
-      if (!slot || !container) return;
-      const slotRect = slot.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      setViewPillRect({ left: slotRect.left - containerRect.left, top: slotRect.top - containerRect.top, width: slotRect.width, height: slotRect.height });
-    };
-    medir();
-    window.addEventListener("resize", medir);
-    return () => window.removeEventListener("resize", medir);
-  }, [view]);
-
   return (
     <div className="flex flex-col" style={{ gap: 18, fontFamily: "var(--rd-font)" }}>
       <div className="flex items-center flex-wrap" style={{ gap: 12 }}>
@@ -5823,43 +5807,27 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           </button>
         )}
         <div className="flex items-center flex-wrap" style={{ gap: 10, marginLeft: "auto" }}>
-          <div
-            ref={viewToggleRef}
-            className="relative flex"
-            style={{ background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: 3 }}
-          >
-            {viewPillRect && (
-              <span
-                className="absolute"
-                style={{
-                  left: 0,
-                  top: viewPillRect.top,
-                  width: viewPillRect.width,
-                  height: viewPillRect.height,
-                  background: "var(--rd-brand)",
-                  borderRadius: 999,
-                  willChange: "transform",
-                  transform: `translateX(${viewPillRect.left}px)`,
-                  transition: "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)" }}
-              />
-            )}
+          {/* mesma pílula usada em todo o site (.mbr-filtros): o destaque é o fundo do
+              próprio botão, então ele nasce alinhado. A versão anterior desenhava uma
+              faixa verde por cima, posicionada por medição — e bastava a medida vir de
+              um jeito pro destaque ficar torto dentro da moldura */}
+          <div className="mbr-filtros" style={{ minWidth: 0 }}>
             {[
               { id: "lancado", label: "Lançado" },
-              { id: "futuros", label: "Futuros" },
+              { id: "futuros", label: "Agendamentos" },
             ].map((v) => (
               <button
                 key={v.id}
-                ref={(el) => (viewSlotRefs.current[v.id] = el)}
                 onClick={() => setView(v.id)}
-                className="relative"
                 style={{
                   padding: "6px 14px",
+                  borderRadius: 999,
                   fontSize: 12.5,
                   fontWeight: view === v.id ? 700 : 600,
+                  whiteSpace: "nowrap",
+                  background: view === v.id ? "var(--rd-brand)" : "transparent",
                   color: view === v.id ? "#F0F5EE" : "var(--rd-text-dim)",
-                  transition: "color 0.15s ease",
-                  zIndex: 1,
-                  background: "none" }}
+                  transition: "background 0.2s ease, color 0.15s ease" }}
               >
                 {v.label}
               </button>
@@ -6137,7 +6105,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
                   className="flex items-center"
                   style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
                 >
-                  Ver em Futuros <ChevronRight size={13} strokeWidth={2.75} />
+                  Ver em Agendamentos <ChevronRight size={13} strokeWidth={2.75} />
                 </button>
               </div>
             </div>
