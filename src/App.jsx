@@ -9,7 +9,7 @@ import mapStyle from "./mapStyle.json";
 // (tudo em um arquivo só, sem imports externos) publicada em /public.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.js");
 import { getKV, setKV, subscribeKV, uploadArquivo } from "./lib/storage";
-import { useAuth, signIn, signOut, chamarAdminApi, listarUsuarios } from "./lib/auth";
+import { useAuth, signIn, signOut, chamarAdminApi, listarUsuarios, alterarMinhaSenha } from "./lib/auth";
 import {
   Bike,
   Wallet,
@@ -56,6 +56,7 @@ import {
   Timer,
   MoreHorizontal,
   Download,
+  Copy,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -1865,7 +1866,7 @@ function ClienteDetalhe({
   ];
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
+    <div className="flex flex-col mbr-fade-in" style={{ gap: "var(--rd-s5)" }}>
       {/* BARRA DE CIMA */}
       <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
         <button onClick={onVoltar} className="flex items-center mbr-hover-grow" style={{ gap: 5, fontSize: 13, fontWeight: 600, color: "var(--rd-text-dim)" }}>
@@ -2087,7 +2088,7 @@ function ClienteDetalhe({
                   <button
                     key={i}
                     onClick={() => onPreview({ url: a.link || a, title: `Contrato · ${formatPlaca(moto.placa)}` })}
-                    className="flex items-center mbr-hover-grow"
+                    className="flex items-center"
                     style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
                   >
                     <FileText size={12} /> {anexos.length > 1 ? `Contrato ${i + 1}` : "Contrato"}
@@ -3697,9 +3698,9 @@ function MotoDetalhe({
     return monthLabel(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   })();
 
-  const anexosContrato = contratoAnexosOf(moto.contratoAtual);
+  // contrato (PDF/anexo) não entra mais aqui — fica só na ficha do cliente, junto do
+  // resto da vida dele; a ficha da moto guarda só os documentos da moto em si
   const documentos = [
-    ...anexosContrato.map((a, i) => ({ url: a.link || a, titulo: anexosContrato.length > 1 ? `Contrato ${i + 1}` : "Contrato" })),
     ...notaFiscalAnexosOf(moto).map((a, i, l) => ({ url: a.link, titulo: l.length > 1 ? `Nota fiscal ${i + 1}` : "Nota fiscal" })),
     ...notaFiscalFabricaAnexosOf(moto).map((a, i, l) => ({ url: a.link, titulo: l.length > 1 ? `NF de fábrica ${i + 1}` : "NF de fábrica" })),
     ...(moto.documentoLink ? [{ url: moto.documentoLink, titulo: "Documento" }] : []),
@@ -3751,7 +3752,7 @@ function MotoDetalhe({
   const linkRastreio = moto.linkRastreamento || config?.linkRastreioGeral;
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
+    <div className="flex flex-col mbr-fade-in" style={{ gap: "var(--rd-s5)" }}>
       {/* BARRA DE CIMA — volta pra lista, identifica a moto e concentra as ações */}
       <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
         <button onClick={onVoltar} className="flex items-center mbr-hover-grow" style={{ gap: 5, fontSize: 13, fontWeight: 600, color: "var(--rd-text-dim)" }}>
@@ -4004,7 +4005,7 @@ function MotoDetalhe({
                   <button
                     key={`${d.titulo}-${i}`}
                     onClick={() => onPreview({ url: d.url, title: `${d.titulo} · ${formatPlaca(moto.placa)}` })}
-                    className="flex items-center mbr-hover-grow"
+                    className="flex items-center"
                     style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
                   >
                     <FileText size={12} /> {d.titulo}
@@ -5838,6 +5839,29 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
             permissoes.podeEditar && (
               <span className="flex items-center flex-none" style={{ gap: 2 }}>
                 <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // repete um gasto/recebimento fixo (rastreador, aluguel do ponto,
+                    // contabilidade...) sem digitar tudo de novo todo mês — mesmos dados,
+                    // só a data já vem pra hoje e vira um lançamento novo, não uma edição
+                    setModal({
+                      ...primeiro,
+                      id: uid(),
+                      data: todayISO(),
+                      valorUnitario: undefined,
+                      qtdMotos: undefined,
+                      parcelaAtual: undefined,
+                      parcelasTotal: undefined,
+                      grupoParcelas: undefined,
+                    });
+                  }}
+                  title="Duplicar"
+                  className="flex items-center justify-center mbr-hover-grow"
+                  style={{ width: 26, height: 26, color: "var(--rd-text-faint)" }}
+                >
+                  <Copy size={13} />
+                </button>
+                <button
                   onClick={(e) => { e.stopPropagation(); setModal(primeiro); }}
                   title="Editar"
                   className="flex items-center justify-center mbr-hover-grow"
@@ -5949,6 +5973,15 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
               </button>
             ))}
           </div>
+          {view === "lancado" && permissoes.podeEditar && (
+            <button
+              onClick={() => setModal({ ...emptyLancamento(), tipo: "saida", natureza: "Manutenção" })}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "8px 15px", fontSize: 12.5, fontWeight: 600 }}
+            >
+              <Wrench size={14} strokeWidth={2.5} /> Manutenção
+            </button>
+          )}
           {view === "lancado" && (
             <button
               onClick={exportarMes}
@@ -8568,7 +8601,68 @@ function UsuariosSection({ meuId }) {
   );
 }
 
-function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
+// troca a própria senha (qualquer nível de acesso) — ao contrário de "Usuários",
+// que só existe pra admin mexer em login alheio
+function MinhaSenhaCard() {
+  const [senha, setSenha] = useState("");
+  const [confirmar, setConfirmar] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ok, setOk] = useState(false);
+
+  const salvar = async () => {
+    if (senha.length < 6) {
+      setErro("A senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (senha !== confirmar) {
+      setErro("As senhas não são iguais.");
+      return;
+    }
+    setEnviando(true);
+    setErro("");
+    const resultado = await alterarMinhaSenha(senha);
+    setEnviando(false);
+    if (!resultado.ok) {
+      setErro(resultado.erro);
+      return;
+    }
+    setSenha("");
+    setConfirmar("");
+    setOk(true);
+    setTimeout(() => setOk(false), 2500);
+  };
+
+  return (
+    <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "22px 24px" }}>
+      <span style={RD_LABEL}>Minha senha</span>
+      <div style={{ marginTop: 10 }}>
+        <CampoSenha label="Nova senha (mínimo 6 caracteres)" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
+        <CampoSenha label="Confirmar nova senha" value={confirmar} onChange={(e) => setConfirmar(e.target.value)} autoComplete="new-password" />
+      </div>
+      {erro && (
+        <div className="text-xs mb-3 flex items-center gap-1" style={{ color: "var(--rd-negative)", fontFamily: "var(--rd-font)" }}>
+          <AlertTriangle size={13} /> {erro}
+        </div>
+      )}
+      {ok && (
+        <div className="text-xs mb-3 flex items-center gap-1" style={{ color: "var(--rd-positive)", fontFamily: "var(--rd-font)" }}>
+          <CheckCircle2 size={13} /> Senha trocada.
+        </div>
+      )}
+      <button
+        onClick={salvar}
+        disabled={enviando || !senha}
+        className="rounded-xl"
+        style={{ background: "var(--rd-brand-soft)", color: "var(--rd-shell)", fontWeight: 700, fontSize: 13, padding: "9px 18px", opacity: enviando || !senha ? 0.6 : 1 }}
+      >
+        {enviando ? "Salvando..." : "Salvar nova senha"}
+      </button>
+    </div>
+  );
+}
+
+function ConfiguracoesView({ config, persist, perfil, onSignOut, motos, clientes, lancamentos, futuros }) {
   const [local, setLocal] = useState(config);
   const [status, setStatus] = useState({ text: "", kind: "" }); // kind: "ok" | "erro" | ""
 
@@ -8583,6 +8677,18 @@ function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
     await persist(next);
     setStatus({ text: "Salvo ✓", kind: "ok" });
     setTimeout(() => setStatus({ text: "", kind: "" }), 1800);
+  };
+
+  // backup completo — motos, clientes, caixa e agendamentos num JSON só, pra guardar
+  // fora do site (o banco não tem histórico de versões: um erro em massa não volta atrás)
+  const baixarBackup = () => {
+    const dados = { geradoEm: new Date().toISOString(), motos, clientes, lancamentos, futuros };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(dados, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mobirelli-backup-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -8606,6 +8712,24 @@ function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
           style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-negative)", borderRadius: 999, padding: "9px 16px", fontSize: 12.5, fontWeight: 700 }}
         >
           <LogOut size={14} /> Sair
+        </button>
+      </div>
+
+      <MinhaSenhaCard />
+
+      <div className="rounded-2xl flex items-center justify-between flex-wrap" style={{ gap: 12, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "16px 20px" }}>
+        <div className="min-w-0">
+          <div style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 14.5 }}>Backup dos dados</div>
+          <div style={{ color: "var(--rd-text-dim)", fontSize: 12 }}>
+            Baixa motos, clientes, caixa e agendamentos num arquivo só, pra guardar fora do site.
+          </div>
+        </div>
+        <button
+          onClick={baixarBackup}
+          className="flex items-center flex-shrink-0"
+          style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "9px 16px", fontSize: 12.5, fontWeight: 700 }}
+        >
+          <Download size={14} /> Baixar backup
         </button>
       </div>
 
@@ -9753,7 +9877,16 @@ function AppAutenticado({ perfil, onSignOut }) {
                 }}
               />
             ) : (
-              <ConfiguracoesView config={configState.value} persist={configState.persist} perfil={perfil} onSignOut={onSignOut} />
+              <ConfiguracoesView
+                config={configState.value}
+                persist={configState.persist}
+                perfil={perfil}
+                onSignOut={onSignOut}
+                motos={motosState.items}
+                clientes={clientesState.items}
+                lancamentos={fluxoState.items}
+                futuros={futurosState.items}
+              />
             )}
           </div>
         )}

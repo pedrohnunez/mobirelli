@@ -19,6 +19,17 @@ export async function signOut() {
 }
 
 /**
+ * Troca a senha de quem está logado agora (ao contrário de "redefinir-senha" de
+ * outra pessoa, essa não passa pela function serverless — o próprio Supabase Auth
+ * já deixa qualquer usuário trocar a própria senha, sem precisar de service role key).
+ */
+export async function alterarMinhaSenha(senha) {
+  const { error } = await supabase.auth.updateUser({ password: senha });
+  if (error) return { ok: false, erro: "Não foi possível trocar a senha agora." };
+  return { ok: true };
+}
+
+/**
  * Chama a função serverless api/admin-usuarios.js já anexando o token da sessão atual —
  * usada tanto pra criar o primeiro administrador quanto pelas ações da tela de Usuários.
  */
