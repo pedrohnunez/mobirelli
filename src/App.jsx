@@ -3585,7 +3585,14 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     await persist(next);
     setModal(null);
   };
-  const excluir = async (id) => persist(futuros.filter((x) => x.id !== id));
+  // persist() atualiza a lista na hora (otimista) mas pode falhar ao salvar de verdade —
+  // sem conferir o retorno, a conta "voltava" sozinha (sumia da tela mas continuava no
+  // banco) sem avisar nada. Agora devolve se deu certo, pra quem chama decidir se fecha.
+  const excluir = async (id) => {
+    const ok = await persist(futuros.filter((x) => x.id !== id));
+    if (!ok) window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
+    return ok;
+  };
 
   const { fixoMensalSaida, fixoMensalEntrada, avulsosPendentesSaida, avulsosPendentesEntrada, previstoSaida12Meses, previstoEntrada12Meses, saldoPrevisto12Meses } =
     totaisFuturos(futuros, motos);
@@ -3966,9 +3973,8 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
           editando={futuros.some((x) => x.id === modal.id)}
           onClose={() => setModal(null)}
           onSave={salvar}
-          onDelete={() => {
-            excluir(modal.id);
-            setModal(null);
+          onDelete={async () => {
+            if (await excluir(modal.id)) setModal(null);
           }}
         />
       )}
@@ -4056,7 +4062,11 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     setModal(null);
   };
 
-  const excluir = async (id) => persist(lancamentos.filter((x) => x.id !== id));
+  const excluir = async (id) => {
+    const ok = await persist(lancamentos.filter((x) => x.id !== id));
+    if (!ok) window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
+    return ok;
+  };
   const ordenados = [...lancamentos].sort((a, b) => (a.data < b.data ? 1 : -1));
 
   const porMes = {};
@@ -4580,9 +4590,8 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           editando={lancamentos.some((x) => x.id === modal.id)}
           onClose={() => setModal(null)}
           onSave={salvar}
-          onDelete={() => {
-            excluir(modal.id);
-            setModal(null);
+          onDelete={async () => {
+            if (await excluir(modal.id)) setModal(null);
           }}
           motos={motos}
         />
