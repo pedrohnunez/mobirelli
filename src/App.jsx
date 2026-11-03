@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useId, forwardRef, useImperativeHandle } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, useId, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import * as maplibregl from "maplibre-gl";
 import mapStyle from "./mapStyle.json";
@@ -9,7 +9,7 @@ import mapStyle from "./mapStyle.json";
 // (tudo em um arquivo só, sem imports externos) publicada em /public.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.js");
 import { getKV, setKV, subscribeKV, uploadArquivo } from "./lib/storage";
-import { useAuth, signIn, signOut, chamarAdminApi, listarUsuarios } from "./lib/auth";
+import { useAuth, signIn, signOut, chamarAdminApi, listarUsuarios, alterarMinhaSenha } from "./lib/auth";
 import {
   Bike,
   Wallet,
@@ -20,11 +20,16 @@ import {
   TrendingUp,
   TrendingDown,
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
+  Check,
   Clock,
+  Tag,
   Wrench,
   Trash2,
   Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
   FileText,
   Search,
   ChevronDown,
@@ -35,7 +40,6 @@ import {
   Mail,
   MapPin,
   Settings,
-  Image as ImageIcon,
   Navigation,
   Crosshair,
   Route,
@@ -50,6 +54,9 @@ import {
   Info,
   Landmark,
   Timer,
+  MoreHorizontal,
+  Download,
+  Copy,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -70,27 +77,33 @@ import {
    como único destaque, zero bordas visíveis (superfícies separadas por
    contraste, não por contorno)
 =========================================================== */
+// Paleta antiga do site, agora REMAPEADA pra paleta do redesign (os mesmos valores
+// dos tokens --rd-* de index.css, em hex porque hexToRgba()/mixColors() precisam de
+// hex de verdade, não de var(--...)).
+//
+// Por que remapear em vez de trocar tela por tela: tudo que ainda não foi reescrito
+// no design novo (os 11 modais, as fichas expandidas de moto e de cliente, a tela de
+// login) lê estas chaves. Mudando aqui, essa superfície inteira passa a falar a mesma
+// língua visual do resto — em vez de o site ter metade numa estética e metade noutra.
 const theme = {
-  bg: "#121212",
-  panel: "#1A1A1A",
-  card: "#1A1A1A",
-  card2: "#242420",
-  // sem bordas em card/badge/avatar/ícone — único uso permitido é como divisor
-  // fino (borderTop/Bottom) entre linhas de uma lista, nunca como caixa
-  cardBorder: "transparent",
-  divider: "#242420",
-  mint: "#2FA666",
-  mintText: "#0E2116",
-  sage: "#6FA087",
-  amber: "#D9A25A",
-  coral: "#D9695E",
-  text: "#F5F4EF",
-  textMuted: "#A8ABA3",
-  textFaint: "#8A8D85",
-  textGhost: "#5A5D58",
-  outline: "#2A2E29",
-  outlineText: "#C7CAC2",
-  chartMuted: "#4A4D48",
+  bg: "#0E1512",          // --rd-shell
+  panel: "#141B16",       // --rd-surface
+  card: "#141B16",        // --rd-surface
+  card2: "#0F1712",       // --rd-surface-2
+  cardBorder: "#26352C",  // --rd-border (no design novo o cartão TEM borda fina)
+  divider: "#1A2620",     // --rd-row-border
+  mint: "#8AA981",        // --rd-brand-soft — fundo de botão primário
+  mintText: "#0E1512",    // --rd-shell — texto POR CIMA do verde claro
+  sage: "#A8C79E",        // --rd-brand-light
+  amber: "#C68A3A",       // --rd-attention
+  coral: "#D9705C",       // --rd-negative
+  text: "#E8EDE7",        // --rd-text
+  textMuted: "#A9B8AB",   // --rd-text-muted
+  textFaint: "#7C8C7E",   // --rd-text-dim
+  textGhost: "#5E6F61",   // --rd-text-faint
+  outline: "#26352C",     // --rd-border
+  outlineText: "#A9B8AB", // --rd-text-muted
+  chartMuted: "#5E6F61",  // --rd-text-faint
 };
 
 // mesma ideia do "theme" acima — mutado uma vez no topo de AppAutenticado (a partir do
@@ -116,11 +129,13 @@ const mixColors = (hexA, hexB, t) => {
   const b = hexToRgb(hexB);
   return rgbToHex({ r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t });
 };
-// títulos usam Inter Tight peso 700 (geométrica, mais "cheia"); o resto da interface
-// usa Inter em só 2 pesos (400 regular e 600 semibold)
-const HEAD_FONT = "'Inter Tight', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
-const BODY_FONT = "'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
-const MONO_FONT = "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
+// O site inteiro usa uma fonte só (Montserrat, a do redesign) — o que separa título de
+// texto é peso e tamanho, não família. HEAD_FONT/BODY_FONT continuam existindo porque
+// meio site ainda os cita; agora os dois apontam pra mesma pilha, então não sobra
+// nenhum pedaço da interface escrito na fonte antiga.
+const HEAD_FONT = "'Montserrat', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
+const BODY_FONT = "'Montserrat', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
+const MONO_FONT = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
 const fontImport = `
 @import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@700&family=Inter:wght@400;600&family=IBM+Plex+Mono:wght@500&display=swap');
@@ -149,7 +164,7 @@ const formatCompact = (v) => {
 };
 
 const formatDate = (d) => {
-  if (!d) return "—";
+  if (!d) return "";
   const [y, m, day] = d.split("-");
   return `${day}/${m}/${y}`;
 };
@@ -218,6 +233,7 @@ function custosDaMoto(moto, lancamentos) {
       data: l.data,
       descricao: l.descricao || l.categoria || "Sem descrição",
       valorGasto: l.valor,
+      doCaixa: true,
     }));
   return [...manuais, ...doCaixa].sort((a, b) => (a.data < b.data ? 1 : -1));
 }
@@ -243,6 +259,7 @@ function manutencoesDaMoto(moto, lancamentos) {
       data: l.data,
       descricao: l.descricao || l.categoria || "Manutenção",
       valorGasto: l.valor,
+      doCaixa: true,
     }));
   return [...manuais, ...doCaixa].sort((a, b) => (a.data < b.data ? 1 : -1));
 }
@@ -282,6 +299,43 @@ function projecaoFuturosPorMes(futuros, meses = 12) {
 // assim a mensalidade de cada moto alugada entra automaticamente na previsão de
 // Futuros, sem precisar cadastrar de novo. Usa a data de término do contrato (se
 // tiver sido preenchida) como limite; sem data, entra como indefinido.
+// PRIMEIRA COBRANÇA de um contrato.
+//
+// O aluguel é pago no fim do período, não na entrada: quem alugou dia 4 deste mês só
+// paga dia 4 do mês QUE VEM. Então um contrato que começou neste mês ainda não gera
+// cobrança agora — e era isso que fazia o previsto do mês crescer sozinho assim que
+// uma moto nova era alugada, obrigando a ir olhar contrato por contrato pra saber o que
+// dava pra cobrar de verdade.
+//
+// Devolve a data (YYYY-MM-DD) da primeira cobrança: o dia de vencimento do contrato,
+// no mês seguinte ao do início. Sem data de início, não dá pra afirmar nada — devolve
+// null e o contrato segue valendo desde sempre, como era antes.
+function primeiraCobrancaDoContrato(contrato) {
+  const inicio = contrato?.dataInicio;
+  if (!inicio) return null;
+  const [ano, mes] = inicio.split("-").map(Number);
+  if (!ano || !mes) return null;
+  const dia = diaVencimentoDoContrato(contrato) || Number(inicio.slice(8, 10)) || 1;
+  // mês seguinte ao do início; o dia é limitado ao último dia desse mês (dia 31 em
+  // mês de 30, ou 29/30/31 em fevereiro, cairia no mês seguinte sem esse cuidado)
+  const alvo = new Date(ano, mes, 1);
+  const ultimoDia = new Date(alvo.getFullYear(), alvo.getMonth() + 1, 0).getDate();
+  const diaOk = Math.min(dia, ultimoDia);
+  return `${alvo.getFullYear()}-${String(alvo.getMonth() + 1).padStart(2, "0")}-${String(diaOk).padStart(2, "0")}`;
+}
+
+// o contrato já pode ser cobrado no mês "mesKey"? (mesKey no formato YYYY-MM)
+//
+// A data de término NÃO trava a cobrança. Enquanto o contrato continuar sendo o contrato
+// atual da moto, o mês é cobrado: se a moto ainda está com o cliente e ninguém encerrou o
+// contrato, ou ele foi renovado ou vai ser encerrado depois — nos dois casos o aluguel
+// desse mês é devido. Quem para de cobrar é o botão "Encerrar contrato", não o calendário.
+function contratoCobraNoMes(contrato, mesKey) {
+  const primeira = primeiraCobrancaDoContrato(contrato);
+  if (!primeira) return true;
+  return mesKey >= primeira.slice(0, 7);
+}
+
 function contratosComoFuturos(motos) {
   return (motos || [])
     .filter((m) => m.contratoAtual && Number(m.contratoAtual.valorMensal) > 0)
@@ -291,8 +345,9 @@ function contratosComoFuturos(motos) {
       descricao: `Mensalidade ${formatPlaca(m.placa)}`,
       categoria: "Contrato ativo",
       valor: Number(m.contratoAtual.valorMensal) || 0,
-      vencimento: m.contratoAtual.dataInicio || todayISO(),
+      vencimento: primeiraCobrancaDoContrato(m.contratoAtual) || m.contratoAtual.dataInicio || todayISO(),
       diaVencimento: diaVencimentoDoContrato(m.contratoAtual),
+      dataInicioContrato: m.contratoAtual.dataInicio || "",
       dataTermino: m.contratoAtual.dataTermino || "",
       recorrente: true,
       pago: false,
@@ -301,8 +356,17 @@ function contratosComoFuturos(motos) {
     }));
 }
 
+// CONTA "POR MOTO" — coisas como o rastreador são o mesmo valor em cada moto da
+// frota. Em vez de cadastrar uma conta por moto (e ter que mexer nisso toda vez que
+// entra ou sai moto), a conta guarda o valor UNITÁRIO e se multiplica sozinha pelo
+// tamanho da frota.
+function valorDoFuturo(f, motos) {
+  const valor = Number(f?.valor) || 0;
+  return f?.porMoto ? valor * ((motos || []).length || 0) : valor;
+}
+
 function totaisFuturos(futuros, motos) {
-  const todos = [...(futuros || []), ...contratosComoFuturos(motos)];
+  const todos = [...(futuros || []).map((f) => ({ ...f, valor: valorDoFuturo(f, motos) })), ...contratosComoFuturos(motos)];
   const recorrentes = todos.filter((f) => f.recorrente);
   const fixoMensalSaida = recorrentes.filter((f) => f.tipo !== "entrada").reduce((s, f) => s + (Number(f.valor) || 0), 0);
   const fixoMensalEntrada = recorrentes.filter((f) => f.tipo === "entrada").reduce((s, f) => s + (Number(f.valor) || 0), 0);
@@ -368,7 +432,7 @@ function futurosProximosDias(futuros, motos, dias = 7) {
 
   todos.forEach((f) => {
     if (!f.vencimento) return;
-    const valor = Number(f.valor) || 0;
+    const valor = valorDoFuturo(f, motos);
     const itens = f.tipo === "entrada" ? itensEntrada : itensSaida;
     const soma = (v) => {
       if (f.tipo === "entrada") entrada += v;
@@ -426,6 +490,165 @@ const dataDoFuturoNoMes = (f, mesKey) => {
   return `${mesKey}-${String(dia).padStart(2, "0")}`;
 };
 
+// O QUE AINDA ESTÁ EM ABERTO NUM MÊS — as contas futuras que não viraram lançamento e o
+// aluguel dos contratos que ainda não foi lançado no Caixa. Devolve os itens, não só os
+// totais: é isso que responde "o que exatamente falta entrar/sair este mês".
+function pendenciasDoMes(futuros, motos, lancamentos, mesKey) {
+  const aReceber = [];
+  const aPagar = [];
+
+  (futuros || []).forEach((f) => {
+    if (!futuroPendenteNoMes(f, mesKey)) return;
+    const moto = (motos || []).find((m) => m.id === f.motoId);
+    const nome = nomeDoFuturo(f);
+    const placa = moto ? formatPlaca(moto.placa) : "";
+    (f.tipo === "entrada" ? aReceber : aPagar).push({
+      id: f.id,
+      label: placa && !nome.includes(placa) ? `${nome} (${placa})` : nome,
+      valor: valorDoFuturo(f, motos),
+      data: dataDoFuturoNoMes(f, mesKey),
+    });
+  });
+
+  (motos || []).forEach((m) => {
+    const c = m.contratoAtual;
+    if (!c || !(Number(c.valorMensal) > 0)) return;
+    if (!contratoCobraNoMes(c, mesKey)) return;
+    // já lançado no Caixa neste mês = não está mais em aberto
+    if (pagouNoMes(pagamentosDaMoto(m, lancamentos), mesKey)) return;
+    const dia = diaVencimentoDoContrato(c);
+    const [ano, mesN] = mesKey.split("-").map(Number);
+    const ultimo = new Date(ano, mesN, 0).getDate();
+    aReceber.push({
+      id: `contrato-${m.id}`,
+      label: `Mensalidade ${formatPlaca(m.placa)}`,
+      valor: Number(c.valorMensal) || 0,
+      data: `${mesKey}-${String(Math.min(dia || 1, ultimo)).padStart(2, "0")}`,
+    });
+  });
+
+  const porData = (lista) => [...lista].sort((a, b) => ((a.data || "") < (b.data || "") ? -1 : 1));
+  return {
+    aReceber: porData(aReceber),
+    aPagar: porData(aPagar),
+    totalReceber: aReceber.reduce((t, i) => t + i.valor, 0),
+    totalPagar: aPagar.reduce((t, i) => t + i.valor, 0),
+  };
+}
+
+// TUDO QUE TEM DATA NUM MÊS — o que ainda vai entrar/sair e o que já entrou/saiu.
+// É a conta que a aba "Futuros" mostra: uma coluna de receber, uma de pagar, cada
+// linha já sabendo se está feita, atrasada ou vencendo essa semana. Os totais batem
+// com "pendenciasDoMes" (a conta que a Visão geral usa), porque a regra de quem
+// cobra no mês é a mesma: contratoCobraNoMes + pagamento lançado no Caixa.
+function contasDoMes(futuros, motos, clientes, lancamentos, mesKey) {
+  const hojeISO = todayISO();
+  const mesHoje = hojeISO.slice(0, 7);
+  const [ano, mesN] = mesKey.split("-").map(Number);
+  const ultimoDia = new Date(ano, mesN, 0).getDate();
+  const diasAte = (data) => Math.round((new Date(`${data}T00:00:00`) - new Date(`${hojeISO}T00:00:00`)) / 86400000);
+  const receber = [];
+  const pagar = [];
+  const proximoMes = [];
+
+  (futuros || []).forEach((f) => {
+    const recorrente = !!f.recorrente;
+    const dentroDoMes = recorrente
+      ? (() => {
+          const ini = (f.vencimento || hojeISO).slice(0, 7);
+          const fim = f.dataTermino ? f.dataTermino.slice(0, 7) : null;
+          return mesKey >= ini && (!fim || mesKey <= fim);
+        })()
+      : (f.vencimento || "").slice(0, 7) === mesKey;
+    if (!dentroDoMes) return;
+    const data = dataDoFuturoNoMes(f, mesKey);
+    const feito = recorrente ? (f.confirmados || []).includes(mesKey) : !!f.pago;
+    const moto = (motos || []).find((m) => m.id === f.motoId);
+    const partes = [];
+    if (moto) partes.push(formatPlaca(moto.placa));
+    if (f.porMoto) partes.push(`${formatCurrency(Number(f.valor) || 0)} × ${(motos || []).length} moto${(motos || []).length === 1 ? "" : "s"}`);
+    if (f.parcelasTotal > 1) partes.push(`parcela ${f.parcelaAtual || 1} de ${f.parcelasTotal}`);
+    else if (recorrente) partes.push("fixo mensal");
+    const detalhe = detalheDoFuturo(f);
+    if (detalhe) partes.push(detalhe);
+    const item = {
+      id: `f:${f.id}:${mesKey}`,
+      data,
+      dia: Number(data.slice(8, 10)) || 1,
+      titulo: nomeDoFuturo(f),
+      sub: partes.join(" · "),
+      valor: valorDoFuturo(f, motos),
+      feito,
+      feitoEm: feito ? data : null,
+      diasAte: diasAte(data),
+      atrasado: !feito && mesKey <= mesHoje && diasAte(data) < 0,
+      origem: "futuro",
+      futuro: f,
+    };
+    (f.tipo === "entrada" ? receber : pagar).push(item);
+  });
+
+  (motos || []).forEach((m) => {
+    const c = m.contratoAtual;
+    if (!c || !(Number(c.valorMensal) > 0)) return;
+    const cliente = (clientes || []).find((x) => x.id === c.clienteId);
+    const dia = Math.min(diaVencimentoDoContrato(c) || 1, ultimoDia);
+    const data = `${mesKey}-${String(dia).padStart(2, "0")}`;
+    const base = {
+      titulo: cliente?.nome || `Mensalidade ${formatPlaca(m.placa)}`,
+      valor: Number(c.valorMensal) || 0,
+      origem: "contrato",
+      moto: m,
+    };
+    if (!contratoCobraNoMes(c, mesKey)) {
+      // contrato fechado agora: a 1ª cobrança é no mês seguinte (aluguel se paga no
+      // fim do período) — vira o bloco "a partir do mês que vem"
+      const primeira = primeiraCobrancaDoContrato(c);
+      if (primeira && primeira.slice(0, 7) > mesKey) {
+        proximoMes.push({
+          ...base,
+          id: `c1:${m.id}`,
+          data: primeira,
+          dia: Number(primeira.slice(8, 10)) || 1,
+          sub: `${formatPlaca(m.placa)} · 1ª cobrança`,
+          mesPrimeira: primeira.slice(0, 7),
+        });
+      }
+      return;
+    }
+    const pagamentos = pagamentosDaMoto(m, lancamentos);
+    const feito = pagouNoMes(pagamentos, mesKey);
+    const pagamentoDoMes = pagamentos.find((p) => (p.data || "").slice(0, 7) === mesKey);
+    receber.push({
+      ...base,
+      id: `c:${m.id}:${mesKey}`,
+      data,
+      dia,
+      sub: `${formatPlaca(m.placa)} · mensalidade`,
+      feito,
+      feitoEm: pagamentoDoMes?.data || null,
+      diasAte: diasAte(data),
+      atrasado: !feito && mesKey <= mesHoje && diasAte(data) < 0,
+    });
+  });
+
+  // pendente primeiro (na ordem do calendário), feito por último
+  const ordenar = (lista) => [...lista].sort((a, b) => (a.feito !== b.feito ? (a.feito ? 1 : -1) : (a.data < b.data ? -1 : 1)));
+  const soma = (lista) => lista.reduce((t, i) => t + i.valor, 0);
+  const pendentes = (lista) => lista.filter((i) => !i.feito);
+  return {
+    receber: ordenar(receber),
+    pagar: ordenar(pagar),
+    proximoMes: [...proximoMes].sort((a, b) => (a.data < b.data ? -1 : 1)),
+    aReceber: soma(pendentes(receber)),
+    aPagar: soma(pendentes(pagar)),
+    qtdReceber: pendentes(receber).length,
+    qtdPagar: pendentes(pagar).length,
+    vencemNaSemana: [...pendentes(receber), ...pendentes(pagar)].filter((i) => i.diasAte >= 0 && i.diasAte <= 7).length,
+    ultimoDia,
+  };
+}
+
 // consulta o CEP no ViaCEP (serviço público, gratuito, sem chave) e devolve o endereço
 // pra preencher os campos sozinho — só chama quando o CEP tem os 8 dígitos
 async function buscarEnderecoPorCEP(cep) {
@@ -456,6 +679,26 @@ const isOverdue = (dateStr) => {
 // dia do mês em que o cliente paga a mensalidade — contratos antigos guardavam uma
 // data completa (dataVencimento), então aproveita o dia dela se o campo novo (diaVencimento)
 // ainda não tiver sido preenchido
+// próximo vencimento a partir de hoje: a data (dd/mm) e quantos dias faltam. Mostrar
+// só "dia 12" obrigava a fazer a conta de cabeça pra saber se era essa semana ou a que vem
+function proximoVencimento(contrato) {
+  const dia = diaVencimentoDoContrato(contrato);
+  if (!dia) return null;
+  const hoje = new Date();
+  const hojeZero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+  const noMes = (ano, mes) => {
+    const ultimo = new Date(ano, mes + 1, 0).getDate();
+    return new Date(ano, mes, Math.min(dia, ultimo));
+  };
+  let venc = noMes(hoje.getFullYear(), hoje.getMonth());
+  if (venc < hojeZero) venc = noMes(hoje.getFullYear(), hoje.getMonth() + 1);
+  const dias = Math.round((venc - hojeZero) / (1000 * 60 * 60 * 24));
+  return {
+    data: `${String(venc.getDate()).padStart(2, "0")}/${String(venc.getMonth() + 1).padStart(2, "0")}`,
+    dias,
+  };
+}
+
 function diaVencimentoDoContrato(contrato) {
   if (!contrato) return null;
   if (contrato.diaVencimento) return Number(contrato.diaVencimento);
@@ -463,36 +706,68 @@ function diaVencimentoDoContrato(contrato) {
   return null;
 }
 
-// vencido = já passou o dia de pagamento deste mês E ainda não tem nenhuma entrada
-// lançada no caixa pra essa moto depois desse vencimento — sem o segundo pedaço, o
-// pagamento continuava aparecendo como atrasado mesmo depois de lançado no Caixa
+// QUITOU o mês? Um pagamento lançado em qualquer dia do mês já quita a mensalidade
+// daquele mês. O dono lança a entrada no mês em que recebe o dinheiro, então é o mês do
+// lançamento que importa, não o dia: comparar com o dia do vencimento fazia o pagamento
+// recebido ANTES do dia (recebeu dia 5, vencimento dia 10) continuar contando como
+// atrasado — era isso que deixava a moto marcada em vermelho com o pagamento já lançado.
+// Lançamento de mês posterior também conta (pagou atrasado, mas pagou).
+const pagouNoMes = (pagamentos, mesKey) => (pagamentos || []).some((p) => (p.data || "").slice(0, 7) >= mesKey);
+
+// vencido = o mês já é cobrável, o dia de pagamento dele já passou e não existe nenhuma
+// entrada lançada no Caixa pra essa moto nesse mês
 const isContratoVencido = (contrato, pagamentos) => {
   const dia = diaVencimentoDoContrato(contrato);
   if (!dia) return false;
   const hoje = new Date();
   const hojeZero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
-  // a primeira cobrança só vence um mês depois do início do contrato — no mês em que o
-  // cliente começa a usar a moto ele ainda não paga nada, então não pode aparecer como
-  // atrasado antes do dia de cobrança do mês SEGUINTE ao início
-  if (contrato.dataInicio) {
-    const [anoInicio, mesInicio] = contrato.dataInicio.split("-").map(Number);
-    if (anoInicio && mesInicio) {
-      const primeiroVencimento = new Date(anoInicio, mesInicio, dia); // mês seguinte (mesInicio já é 1-based)
-      if (hojeZero < primeiroVencimento) return false;
-    }
-  }
+  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  // a primeira cobrança só vence um mês depois do início do contrato (aluguel é pago no
+  // fim do período) — e contrato já encerrado não vence mais nada
+  if (!contratoCobraNoMes(contrato, mesAtual)) return false;
   const vencimentoDoMes = new Date(hoje.getFullYear(), hoje.getMonth(), dia);
   if (hojeZero <= vencimentoDoMes) return false;
-  const vencimentoISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
-  const jaPagou = (pagamentos || []).some((p) => p.data >= vencimentoISO);
-  return !jaPagou;
+  return !pagouNoMes(pagamentos, mesAtual);
 };
+
+// valor curto pra tabela: "R$ 1.590" — na coluna estreita os centavos só atrapalham
+const formatCurrencyCurto = (v) =>
+  `R$ ${Math.round(Number(v) || 0).toLocaleString("pt-BR")}`;
 
 const monthLabel = (key) => {
   const [y, m] = key.split("-");
   const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   return `${names[Number(m) - 1]}/${y.slice(2)}`;
 };
+
+// "08/09/26" — data curta pro extrato da moto, onde a coluna é estreita
+const formatDateCurto = (d) => {
+  if (!d) return "";
+  const [y, m, day] = d.split("-");
+  return `${day}/${m}/${(y || "").slice(2)}`;
+};
+
+// "Setembro" — mês por extenso, pro selo de "mês pago" da ficha
+const mesPorExtenso = (key) => {
+  const nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+  return nomes[Number((key || "").split("-")[1]) - 1] || "";
+};
+
+// quantos meses cheios se passaram desde uma data (usado em "alugada há", "cliente há")
+const mesesDesdeISO = (dataISO) => {
+  if (!dataISO) return null;
+  const d = new Date(`${dataISO}T00:00:00`);
+  const hoje = new Date();
+  return Math.max(0, (hoje.getFullYear() - d.getFullYear()) * 12 + (hoje.getMonth() - d.getMonth()));
+};
+
+// busca que ignora acento: procurar "celio" tem que achar "Célio"
+const semAcento = (texto) =>
+  (texto || "")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -540,7 +815,7 @@ const enderecoCompleto = (c) => {
   let logradouroNumero = c.logradouro && c.numero ? `${c.logradouro}, ${c.numero}` : c.logradouro;
   if (logradouroNumero && c.complemento) logradouroNumero += ` - ${c.complemento}`;
   return (
-    [logradouroNumero, c.bairro, c.cidade && c.estado ? `${c.cidade}/${c.estado}` : c.cidade].filter(Boolean).join(" — ") ||
+    [logradouroNumero, c.bairro, c.cidade && c.estado ? `${c.cidade}/${c.estado}` : c.cidade].filter(Boolean).join(" · ") ||
     "Endereço não informado"
   );
 };
@@ -637,61 +912,70 @@ function useSharedObject(key, defaultValue) {
 /* ===========================================================
    UI ATOMS
 =========================================================== */
-function Wordmark({ compact, logoDataUrl, logoSize }) {
-  const [erro, setErro] = useState(false);
-  const src = logoDataUrl || "/logo-header.png";
-  if (!erro) {
-    const height = logoSize || (compact ? 28 : 38);
-    return (
-      <img
-        src={src}
-        alt="Mobirelli"
-        style={{ height, width: "auto", maxWidth: "60vw", objectFit: "contain", display: "block" }}
-        onError={() => setErro(true)}
-      />
-    );
-  }
-  return <WordmarkFallback compact={compact} />;
+/* ===========================================================
+   REDESIGN — marca compacta do shell novo (Etapa 2). Ícone das "duas rodas"
+   copiado à risca do mockup exportado do Claude Design. A logo própria
+   configurável foi removida (ver Ajustes) — a marca do shell é fixa.
+=========================================================== */
+function MarcaMobirelli({ size = 38, raio = 11 }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: raio,
+        background: "var(--rd-brand)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flex: "none" }}
+    >
+      <svg width={size * 0.66} viewBox="0 0 60 34" fill="none">
+        <circle cx="12" cy="22" r="8" stroke="#F4F2EA" strokeWidth="4.5" />
+        <circle cx="48" cy="22" r="8" stroke="#F4F2EA" strokeWidth="4.5" />
+        <path d="M12 22 L26 9 H38 L48 22" stroke="#8AA981" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </div>
+  );
 }
 
-function WordmarkFallback({ compact }) {
+function LinhaMarca() {
   return (
-    <div style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
-      <div className="flex items-center gap-1.5">
-        <span style={{ fontFamily: HEAD_FONT, fontWeight: 500, fontSize: compact ? 20 : 26, color: theme.mint }}>mobi</span>
-        <span
-          style={{
-            fontFamily: HEAD_FONT,
-            fontWeight: 700,
-            fontSize: compact ? 20 : 26,
-            color: theme.mintText,
-            background: theme.mint,
-            borderRadius: 8,
-            padding: "1px 10px",
-          }}
-        >
-          relli
-        </span>
-      </div>
-      {!compact && (
-        <div className="flex items-center gap-1.5 ml-1">
-          <div style={{ width: 12, height: 9, borderLeft: `2px solid ${theme.sage}`, borderBottom: `2px solid ${theme.sage}`, borderBottomLeftRadius: 5 }} />
-          <span
-            style={{
-              fontFamily: BODY_FONT,
-              fontSize: 12,
-              fontWeight: 700,
-              color: theme.mintText,
-              background: theme.mint,
-              borderRadius: 6,
-              padding: "1px 7px",
-              letterSpacing: 0.2,
-            }}
-          >
-            aluguel de motos
-          </span>
-        </div>
-      )}
+    <span className="flex items-center" style={{ width: 64 }}>
+      <span style={{ height: 2.5, background: "var(--rd-brand-soft)", borderRadius: 2, flex: 1 }} />
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          border: "1.6px solid var(--rd-brand-soft)",
+          background: "var(--rd-sidebar)",
+          boxSizing: "border-box",
+          flex: "none",
+          marginLeft: -1.6 }}
+      />
+    </span>
+  );
+}
+
+function AvatarIniciais({ username }) {
+  const iniciais = (username || "").trim().slice(0, 2).toUpperCase() || "??";
+  return (
+    <div
+      style={{
+        width: 30,
+        height: 30,
+        borderRadius: 999,
+        background: "#2A3A2F",
+        color: "var(--rd-brand-light)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 12,
+        fontWeight: 700,
+        flex: "none" }}
+    >
+      {iniciais}
     </div>
   );
 }
@@ -701,21 +985,19 @@ function MotoPlate({ placa, size = "normal" }) {
   return (
     <div
       style={{
-        background: theme.card2,
-        borderRadius: grande ? 9 : 6,
-        padding: grande ? "6px 14px" : "3px 9px",
+        background: "var(--rd-brand)",
+        borderRadius: 999,
+        padding: grande ? "6px 15px" : "3px 10px",
         display: "inline-flex",
-        alignItems: "center",
-      }}
+        alignItems: "center" }}
     >
       <span
         style={{
-          fontFamily: MONO_FONT,
-          fontWeight: 500,
-          letterSpacing: grande ? 2 : 1.5,
-          fontSize: grande ? 22 : 14,
-          color: theme.text,
-        }}
+          fontFamily: "ui-monospace, monospace",
+          fontWeight: 700,
+          letterSpacing: grande ? 1.5 : 0.5,
+          fontSize: grande ? 19 : 11.5,
+          color: "var(--rd-brand-light)" }}
       >
         {placa ? formatPlaca(placa) : "SEM PLACA"}
       </span>
@@ -724,10 +1006,10 @@ function MotoPlate({ placa, size = "normal" }) {
 }
 
 const MOTO_STATUS = {
-  disponivel: { label: "Disponível", color: theme.mint, dark: true, icon: CheckCircle2 },
-  alugada: { label: "Alugada", color: theme.amber, dark: true, icon: Bike },
-  preparacao: { label: "Em preparação", color: theme.sage, dark: true, icon: Clock },
-  manutencao: { label: "Em manutenção", color: theme.coral, dark: true, icon: Wrench },
+  disponivel: { label: "Disponível", color: "#C68A3A", dark: true, icon: CheckCircle2 },
+  alugada: { label: "Alugada", color: "#8AA981", dark: true, icon: Bike },
+  preparacao: { label: "Em preparação", color: "#A8C79E", dark: true, icon: Clock },
+  manutencao: { label: "Em manutenção", color: "#D9705C", dark: true, icon: Wrench },
 };
 
 function StatusBadge({ status }) {
@@ -801,26 +1083,39 @@ function Modal({ title, onClose, children }) {
   return createPortal(
     <div
       className="fixed inset-0 flex items-end sm:items-center justify-center"
-      style={{ background: "rgba(10,20,13,0.7)", opacity: visible ? 1 : 0, transition: "opacity 0.2s ease", zIndex: 999 }}
+      style={{
+        background: "rgba(6,10,8,0.62)",
+        backdropFilter: "blur(7px) saturate(1.1)",
+        WebkitBackdropFilter: "blur(7px) saturate(1.1)",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 0.2s ease",
+        zIndex: 999 }}
       onClick={handleClose}
     >
       <div
-        className="w-full sm:max-w-md rounded-t-[24px] sm:rounded-[20px] p-5 max-h-[92vh] overflow-y-auto"
+        className="w-full sm:max-w-md max-h-[92vh] overflow-y-auto mbr-modal-card"
         style={{
-          background: theme.panel,
-          border: `1px solid ${theme.cardBorder}`,
-          boxShadow: "0 -8px 30px rgba(0,0,0,0.25)",
+          background: "var(--rd-surface)",
+          border: "1px solid var(--rd-border)",
+          padding: "var(--rd-pad-card-y) var(--rd-pad-card-x) var(--rd-s6)",
+          fontFamily: "var(--rd-font)",
+          color: "var(--rd-text)",
+          boxShadow: "0 -8px 34px rgba(0,0,0,0.34)",
           opacity: visible ? 1 : 0,
           transform: visible ? "translateY(0) scale(1)" : "translateY(28px) scale(0.97)",
-          transition: "transform 0.24s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease",
-        }}
+          transition: "transform 0.24s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sm:hidden mx-auto mb-3 rounded-full" style={{ width: 36, height: 5, background: theme.cardBorder }} />
-        <div className="flex items-center justify-between mb-4">
-          <h3 style={{ fontFamily: HEAD_FONT, fontSize: 20, color: theme.text }}>{title}</h3>
-          <button onClick={handleClose} className="mbr-hover-grow" style={{ color: theme.textMuted }}>
-            <X size={20} />
+        <div className="sm:hidden mx-auto rounded-full" style={{ width: 36, height: 5, marginBottom: "var(--rd-s3)", background: "var(--rd-border)" }} />
+        <div className="flex items-center justify-between" style={{ gap: "var(--rd-s3)", marginBottom: "var(--rd-s5)" }}>
+          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>{title}</h3>
+          <button
+            onClick={handleClose}
+            aria-label="Fechar"
+            className="flex items-center justify-center flex-shrink-0"
+            style={{ width: 32, height: 32, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+          >
+            <X size={16} strokeWidth={2.5} />
           </button>
         </div>
         {children}
@@ -854,8 +1149,7 @@ function PdfViewer({ url, title, onClose }) {
           boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
           opacity: show ? 1 : 0,
           transform: show ? "scale(1)" : "scale(0.97)",
-          transition: "opacity 0.2s ease, transform 0.2s ease",
-        }}
+          transition: "opacity 0.2s ease, transform 0.2s ease" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div
@@ -889,7 +1183,17 @@ function PdfViewer({ url, title, onClose }) {
 
 function FieldLabel({ children }) {
   return (
-    <label className="text-xs uppercase tracking-wide mb-1 block" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+    <label
+      className="block"
+      style={{
+        fontSize: 10.5,
+        fontWeight: 700,
+        letterSpacing: "0.14em",
+        textTransform: "uppercase",
+        color: "var(--rd-text-faint)",
+        fontFamily: "var(--rd-font)",
+        marginBottom: 6 }}
+    >
       {children}
     </label>
   );
@@ -897,24 +1201,24 @@ function FieldLabel({ children }) {
 
 const inputStyle = {
   width: "100%",
-  background: theme.bg,
-  border: `1px solid ${theme.cardBorder}`,
-  borderRadius: 10,
-  padding: "9px 11px",
-  color: theme.text,
-  fontFamily: BODY_FONT,
-  fontSize: 14,
-  marginBottom: 12,
+  background: "var(--rd-surface-2)",
+  border: "1px solid var(--rd-border)",
+  borderRadius: 12,
+  padding: "10px 13px",
+  color: "var(--rd-text)",
+  fontFamily: "var(--rd-font)",
+  fontSize: 13.5,
+  marginBottom: 14,
 };
 
-// input[type=date] tem um controle nativo (o ícone do calendário) que o navegador
-// desenha com um "box" próprio, maior que o de um input de texto comum, mesmo com o
-// padding igual — height explícito força os dois a ficarem do mesmo tamanho
-const dateInputStyle = { ...inputStyle, height: 41 };
-
-function SelectField({ value, onChange, options }) {
+function SelectField({ value, onChange, options, disabled }) {
   return (
-    <select style={{ ...inputStyle, appearance: "auto" }} value={value} onChange={onChange}>
+    <select
+      style={{ ...inputStyle, appearance: "auto", opacity: disabled ? 0.5 : 1 }}
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+    >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
@@ -925,7 +1229,200 @@ function SelectField({ value, onChange, options }) {
 }
 
 function Row2({ children }) {
-  return <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{children}</div>;
+  return <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: "var(--rd-s3)" }}>{children}</div>;
+}
+
+// checkbox com a cara do site (o quadradinho padrão do navegador destoava do resto) —
+// input real fica invisível por cima só pra manter clique/teclado acessíveis
+function Checkbox({ checked, onChange, children }) {
+  return (
+    <label className="flex items-center gap-2 mb-3 text-sm cursor-pointer select-none" style={{ color: theme.text, fontFamily: "var(--rd-font)" }}>
+      <span className="relative flex items-center justify-center flex-shrink-0" style={{ width: 20, height: 20 }}>
+        <input type="checkbox" checked={checked} onChange={onChange} className="absolute inset-0 opacity-0 cursor-pointer" style={{ margin: 0 }} />
+        <span
+          className="flex items-center justify-center w-full h-full pointer-events-none"
+          style={{
+            borderRadius: 6,
+            background: checked ? theme.mint : "transparent",
+            border: `1.5px solid ${checked ? theme.mint : theme.outline}`,
+            transition: "background 0.15s, border-color 0.15s",
+          }}
+        >
+          {checked && <Check size={13} color={theme.mintText} strokeWidth={3} />}
+        </span>
+      </span>
+      {children}
+    </label>
+  );
+}
+
+const DIAS_SEMANA_ABREV = ["D", "S", "T", "Q", "Q", "S", "S"];
+
+// calendário com a cara do site no lugar do calendário branco nativo do navegador —
+// mesmo padrão de popover do ValorComDetalhe (portal + position:fixed calculado do
+// gatilho, pra escapar de qualquer contexto de empilhamento do modal/card por cima).
+//
+// "recorrente" liga o modo de conta "Todo mês": em vez de trocar a data (um dia certo,
+// num mês certo), cada clique liga/desliga aquele DIA DO MÊS como vencimento — todo
+// clique é reversível, inclusive no dia que já está marcado como principal (quem decide
+// pra onde o "principal" migra quando ele é desmarcado é o onToggleDia do chamador)
+function CampoData({ value, onChange, placeholder, recorrente, diasExtras, onToggleDia, limpavel }) {
+  const [aberto, setAberto] = useState(false);
+  const [pos, setPos] = useState(null);
+  const gatilhoRef = useRef(null);
+  const [grade, setGrade] = useState(() => {
+    const [a, m] = (value || todayISO()).split("-").map(Number);
+    return { ano: a, mes: m };
+  });
+
+  useEffect(() => {
+    if (!value) return;
+    const [a, m] = value.split("-").map(Number);
+    setGrade({ ano: a, mes: m });
+  }, [value]);
+
+  const abrir = () => {
+    const r = gatilhoRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const largura = Math.min(272, window.innerWidth - 16);
+    setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - largura - 8)), largura });
+    setAberto(true);
+  };
+  const fechar = () => setAberto(false);
+
+  useEffect(() => {
+    if (!aberto) return;
+    const onScroll = () => fechar();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [aberto]);
+
+  const diaPrincipal = value ? Number(value.slice(8, 10)) : null;
+  const anoMesValue = value ? value.slice(0, 7) : null;
+  const mesGradeKey = `${grade.ano}-${String(grade.mes).padStart(2, "0")}`;
+
+  const selecionarDia = (dia) => {
+    if (recorrente) {
+      onToggleDia(dia);
+      return;
+    }
+    onChange({ target: { value: `${mesGradeKey}-${String(dia).padStart(2, "0")}` } });
+    setAberto(false);
+  };
+
+  const mudarMes = (delta) => {
+    setGrade((g) => {
+      let mes = g.mes + delta;
+      let ano = g.ano;
+      if (mes > 12) { mes = 1; ano++; }
+      if (mes < 1) { mes = 12; ano--; }
+      return { ano, mes };
+    });
+  };
+
+  const primeiroDiaSemana = new Date(grade.ano, grade.mes - 1, 1).getDay();
+  const diasNoMes = new Date(grade.ano, grade.mes, 0).getDate();
+  const celulas = [...Array(primeiroDiaSemana).fill(null), ...Array.from({ length: diasNoMes }, (_, i) => i + 1)];
+
+  const rotulo = value
+    ? recorrente && diasExtras?.length > 0
+      ? `Dias ${[diaPrincipal, ...diasExtras].sort((a, b) => a - b).join(" e ")}`
+      : formatDate(value)
+    : placeholder || "Escolher data";
+
+  return (
+    <div ref={gatilhoRef} className="relative" style={{ marginBottom: 14 }}>
+      <button
+        type="button"
+        onClick={() => (aberto ? fechar() : abrir())}
+        className="flex items-center w-full"
+        style={{ ...inputStyle, marginBottom: 0, gap: 8, paddingRight: limpavel && value ? 56 : 13 }}
+      >
+        <span className="truncate" style={{ flex: 1, minWidth: 0, textAlign: "left", color: value ? "var(--rd-text)" : "var(--rd-text-dim)" }}>
+          {rotulo}
+        </span>
+        <CalendarClock size={15} color="var(--rd-text-dim)" style={{ flexShrink: 0 }} />
+      </button>
+      {limpavel && value && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange({ target: { value: "" } });
+          }}
+          className="absolute flex items-center justify-center"
+          style={{ right: 30, top: 8, width: 22, height: 22, color: "var(--rd-text-faint)" }}
+        >
+          <X size={14} />
+        </button>
+      )}
+      {aberto && pos && createPortal(
+        <>
+          <div className="fixed inset-0" style={{ zIndex: 999 }} onClick={fechar} />
+          <div
+            className="fixed rounded-2xl mbr-fade-in"
+            style={{
+              top: pos.top,
+              left: pos.left,
+              zIndex: 1000,
+              width: pos.largura,
+              background: "var(--rd-surface)",
+              border: "1px solid var(--rd-border)",
+              boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+              padding: 14,
+            }}
+          >
+            <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+              <button type="button" onClick={() => mudarMes(-1)} className="flex items-center justify-center" style={{ color: "var(--rd-text-muted)", width: 26, height: 26 }}>
+                <ChevronLeft size={16} />
+              </button>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>
+                {mesPorExtenso(mesGradeKey)} de {grade.ano}
+              </span>
+              <button type="button" onClick={() => mudarMes(1)} className="flex items-center justify-center" style={{ color: "var(--rd-text-muted)", width: 26, height: 26 }}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+            <div className="grid grid-cols-7" style={{ gap: 2, marginBottom: 4 }}>
+              {DIAS_SEMANA_ABREV.map((d, i) => (
+                <div key={i} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: "var(--rd-text-faint)" }}>{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7" style={{ gap: 2 }}>
+              {celulas.map((dia, i) => {
+                if (!dia) return <div key={i} />;
+                const ehPrincipal = recorrente ? dia === diaPrincipal : mesGradeKey === anoMesValue && dia === diaPrincipal;
+                const ehExtra = recorrente && (diasExtras || []).includes(dia);
+                const selecionado = ehPrincipal || ehExtra;
+                return (
+                  <button
+                    type="button"
+                    key={i}
+                    onClick={() => selecionarDia(dia)}
+                    style={{
+                      aspectRatio: "1",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: selecionado ? 700 : 500,
+                      background: selecionado ? "var(--rd-brand-soft)" : "transparent",
+                      color: selecionado ? "var(--rd-shell)" : "var(--rd-text)",
+                    }}
+                  >
+                    {dia}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
+    </div>
+  );
 }
 
 /* ===========================================================
@@ -940,7 +1437,7 @@ function AnexoField({ label, linkValue, storageKey, fileName, onChange }) {
     e.target.value = "";
     if (!file) return;
     if (file.size > 20 * 1024 * 1024) {
-      setStatus("Arquivo acima de 20MB — use o link do Drive acima para arquivos maiores.");
+      setStatus("Arquivo acima de 20MB. Use o link do Drive acima para arquivos maiores.");
       return;
     }
     setStatus("Enviando...");
@@ -987,7 +1484,7 @@ function AnexoField({ label, linkValue, storageKey, fileName, onChange }) {
               target="_blank"
               rel="noreferrer"
               className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-              style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+              style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
             >
               <FileText size={12} /> {fileName}
             </a>
@@ -1016,60 +1513,6 @@ function anexosDe(lista, linkAntigo, nomeAntigo) {
 const contratoAnexosOf = (contrato) => anexosDe(contrato?.anexos, contrato?.contratoLink, contrato?.contratoArquivo);
 const notaFiscalAnexosOf = (moto) => anexosDe(moto?.notaFiscalAnexos, moto?.notaFiscalLink, moto?.notaFiscalArquivo);
 const notaFiscalFabricaAnexosOf = (moto) => anexosDe(moto?.notaFiscalFabricaAnexos, null, null);
-
-// botão único "Contrato" — se tiver só 1 anexo, abre direto; se tiver mais (várias
-// páginas/fotos do mesmo contrato), abre uma listinha pra escolher qual página ver
-function ContratoAnexosButton({ anexos, label = "Contrato", tituloPreview, onAbrir }) {
-  const [aberto, setAberto] = useState(false);
-  if (!anexos || anexos.length === 0) return null;
-
-  if (anexos.length === 1) {
-    return (
-      <button
-        onClick={() => onAbrir(anexos[0].link, tituloPreview)}
-        className="inline-flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 mbr-hover-grow"
-        style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-      >
-        <FileText size={13} /> {label}
-      </button>
-    );
-  }
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setAberto((v) => !v)}
-        className="inline-flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3 mbr-hover-grow"
-        style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-      >
-        <FileText size={13} /> {label} ({anexos.length})
-      </button>
-      {aberto && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setAberto(false)} />
-          <div
-            className="absolute z-20 mt-1 left-0 rounded-xl overflow-hidden flex flex-col mbr-fade-in"
-            style={{ background: theme.panel, border: `1px solid ${theme.cardBorder}`, minWidth: 150, boxShadow: "0 6px 20px rgba(0,0,0,0.4)" }}
-          >
-            {anexos.map((a, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  onAbrir(a.link, `${tituloPreview} (${i + 1}/${anexos.length})`);
-                  setAberto(false);
-                }}
-                className="flex items-center gap-2 px-3 py-2 text-xs text-left mbr-hover-grow"
-                style={{ color: theme.text, borderBottom: i < anexos.length - 1 ? `1px solid ${theme.divider}` : "none" }}
-              >
-                <FileText size={12} /> Página {i + 1}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 // mostra de onde vem um valor passando o mouse por cima (computador) ou tocando nele
 // (celular, já que touch não tem hover de verdade) — usado só nos "Próximos 7 dias".
@@ -1134,17 +1577,16 @@ function ValorComDetalhe({ children, itens, fmt }) {
                 border: `1px solid ${theme.cardBorder}`,
                 width: pos.largura,
                 boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
-                padding: 10,
-              }}
+                padding: 10 }}
             >
               {itens.map((it, i) => (
                 <div
                   key={i}
                   className="flex items-center justify-between gap-3 text-xs py-1"
-                  style={{ color: theme.text, fontFamily: BODY_FONT, borderBottom: i < itens.length - 1 ? `1px solid ${theme.divider}` : "none" }}
+                  style={{ color: theme.textMuted, fontFamily: BODY_FONT, borderBottom: i < itens.length - 1 ? `1px solid ${theme.divider}` : "none" }}
                 >
                   <span className="truncate">{it.label}</span>
-                  <span style={{ fontWeight: 700, flexShrink: 0 }}>{fmt(it.total)}</span>
+                  <span style={{ fontWeight: 700, flexShrink: 0, color: it.cor || theme.text }}>{fmt(it.total)}</span>
                 </div>
               ))}
             </div>
@@ -1170,7 +1612,7 @@ function AnexoMultiField({ label, anexos, storageKey, onChange }) {
     const validos = files.filter((f) => f.size <= 20 * 1024 * 1024);
     const grandesDemais = files.length - validos.length;
     if (validos.length === 0) {
-      setStatus("Arquivo(s) acima de 20MB — use o link do Drive acima para arquivos maiores.");
+      setStatus("Arquivo(s) acima de 20MB. Use o link do Drive acima para arquivos maiores.");
       return;
     }
     setStatus(`Enviando ${validos.length > 1 ? `${validos.length} arquivos` : "arquivo"}...`);
@@ -1183,7 +1625,7 @@ function AnexoMultiField({ label, anexos, storageKey, onChange }) {
       }
       onChange([...lista, ...enviados]);
       if (enviados.length < validos.length || grandesDemais > 0) {
-        setStatus("Algum arquivo não pôde ser enviado — tente de novo ou use o link do Drive.");
+        setStatus("Algum arquivo não pôde ser enviado. Tente de novo ou use o link do Drive.");
       } else {
         setStatus("");
       }
@@ -1347,7 +1789,7 @@ function ClienteFormModal({ cliente, onClose, onSave, title }) {
       )}
       {cepStatus === "nao-encontrado" && (
         <div className="text-xs -mt-2 mb-3" style={{ color: theme.coral, fontFamily: BODY_FONT }}>
-          CEP não encontrado — preencha o endereço manualmente.
+          CEP não encontrado. Preencha o endereço manualmente.
         </div>
       )}
       <FieldLabel>Logradouro</FieldLabel>
@@ -1380,7 +1822,7 @@ function ClienteFormModal({ cliente, onClose, onSave, title }) {
           />
         </div>
       </Row2>
-      <button onClick={() => onSave(form)} className="w-full rounded-xl py-2 font-semibold mt-1" style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}>
+      <button onClick={() => onSave(form)} className="w-full rounded-xl py-2 font-semibold mt-1" style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}>
         Salvar
       </button>
     </Modal>
@@ -1406,7 +1848,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
 
   if (motosDisponiveis.length === 0) {
     return (
-      <Modal title={`Vincular moto — ${cliente.nome || "cliente"}`} onClose={onClose}>
+      <Modal title={`Vincular moto · ${cliente.nome || "cliente"}`} onClose={onClose}>
         <div style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
           Nenhuma moto disponível agora. Cadastre uma moto nova ou encerre o contrato de alguma na aba Motos primeiro.
         </div>
@@ -1415,12 +1857,12 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
   }
 
   return (
-    <Modal title={`Vincular moto — ${cliente.nome || "cliente"}`} onClose={onClose}>
+    <Modal title={`Vincular moto · ${cliente.nome || "cliente"}`} onClose={onClose}>
       <FieldLabel>Moto disponível</FieldLabel>
       <SelectField
         value={motoId}
         onChange={(e) => setMotoId(e.target.value)}
-        options={motosDisponiveis.map((m) => ({ value: m.id, label: `${m.placa ? formatPlaca(m.placa) : "sem placa"} — ${m.modelo || "modelo?"}` }))}
+        options={motosDisponiveis.map((m) => ({ value: m.id, label: `${m.placa ? formatPlaca(m.placa) : "sem placa"} · ${m.modelo || "modelo?"}` }))}
       />
       <Row2>
         <div>
@@ -1435,7 +1877,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
       <Row2>
         <div>
           <FieldLabel>Início</FieldLabel>
-          <input type="date" style={dateInputStyle} value={contrato.dataInicio} onChange={setC("dataInicio")} />
+          <CampoData value={contrato.dataInicio} onChange={setC("dataInicio")} />
         </div>
         <div>
           <FieldLabel>Dia de vencimento</FieldLabel>
@@ -1450,9 +1892,9 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
         </div>
       </Row2>
       <FieldLabel>Data de término (opcional)</FieldLabel>
-      <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
+      <CampoData value={contrato.dataTermino || ""} onChange={setC("dataTermino")} limpavel />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Futuros" soma só até essa data. Deixe em branco se for indefinido.
+        Se o aluguel tiver prazo definido, preenche aqui: a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
       <Row2>
         <div>
@@ -1475,7 +1917,7 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
           onSave({ motoId, contrato: { ...contrato, id: contratoId, valorMensal: Number(contrato.valorMensal) || 0 } })
         }
         className="w-full rounded-xl py-2 font-semibold mt-1"
-        style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+        style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
       >
         Confirmar vínculo
       </button>
@@ -1483,7 +1925,349 @@ function VincularMotoModal({ cliente, motosDisponiveis, onClose, onSave }) {
   );
 }
 
-function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
+// tudo que um cliente já pagou: as entradas do caixa das motos que ele teve, cada uma
+// só dentro do período do contrato dele naquela moto (senão o pagamento do cliente
+// seguinte entraria na conta do anterior)
+function pagamentosDoCliente(cliente, motos, lancamentos) {
+  if (!cliente) return [];
+  const periodos = [];
+  (motos || []).forEach((m) => {
+    if (m.contratoAtual?.clienteId === cliente.id) periodos.push({ moto: m, ini: m.contratoAtual.dataInicio, fim: null });
+    (m.historicoContratos || []).forEach((h) => {
+      if (h.clienteId === cliente.id) periodos.push({ moto: m, ini: h.dataInicio, fim: h.encerradoEm });
+    });
+  });
+  const porId = new Map();
+  periodos.forEach(({ moto, ini, fim }) => {
+    pagamentosDaMoto(moto, lancamentos).forEach((p) => {
+      if (ini && p.data < ini) return;
+      if (fim && p.data > fim) return;
+      porId.set(p.id, { ...p, placa: moto.placa });
+    });
+  });
+  return [...porId.values()].sort((a, b) => (a.data < b.data ? 1 : -1));
+}
+
+// contratos que o cliente teve em qualquer moto (o atual fica de fora)
+function contratosAnterioresDoCliente(cliente, motos) {
+  const lista = [];
+  (motos || []).forEach((m) => {
+    (m.historicoContratos || []).forEach((h) => {
+      if (h.clienteId === cliente?.id) lista.push({ ...h, placa: m.placa });
+    });
+  });
+  return lista.sort((a, b) => (a.encerradoEm > b.encerradoEm ? -1 : 1));
+}
+
+/* ===========================================================
+   FICHA DO CLIENTE — tela inteira, mesma cara da ficha da moto
+=========================================================== */
+function ClienteDetalhe({
+  cliente,
+  moto,
+  motos,
+  lancamentos,
+  onVoltar,
+  onEditarCliente,
+  onExcluirCliente,
+  onEditarContrato,
+  onVincularMoto,
+  onNovoPagamento,
+  onPreview,
+}) {
+  const [menuAberto, setMenuAberto] = useState(false);
+
+  const pagamentos = pagamentosDoCliente(cliente, motos, lancamentos);
+  const recebido = pagamentos.reduce((s, p) => s + Number(p.valor || 0), 0);
+  const anteriores = contratosAnterioresDoCliente(cliente, motos);
+
+  const mesAtualKey = todayISO().slice(0, 7);
+  const pagamentosDaMotoAtual = moto ? pagamentosDaMoto(moto, lancamentos) : [];
+  const cobraEsteMes = moto?.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+  const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentosDaMotoAtual, mesAtualKey);
+  const vencido = !!moto && isContratoVencido(moto.contratoAtual, pagamentosDaMotoAtual);
+  const diaVenc = diaVencimentoDoContrato(moto?.contratoAtual);
+  const venc = proximoVencimento(moto?.contratoAtual);
+  const mensalidade = Number(moto?.contratoAtual?.valorMensal || 0);
+
+  // cliente desde: a data de início mais antiga entre todos os contratos dele
+  const clienteDesde = [
+    ...(moto?.contratoAtual?.dataInicio ? [moto.contratoAtual.dataInicio] : []),
+    ...anteriores.map((h) => h.dataInicio).filter(Boolean),
+  ].sort()[0];
+  const mesesDeCasa = mesesDesdeISO(clienteDesde);
+
+  const anexos = contratoAnexosOf(moto?.contratoAtual);
+
+  const extrato = [
+    ...pagamentos.map((p) => ({
+      id: p.id, data: p.data, tipo: "pagamento", sinal: 1, valor: Number(p.valor || 0),
+      // a categoria já costuma trazer a placa ("Mensalidade URB5I50") — só acrescenta
+      // a placa quando ela não está lá, pra não repetir
+      nome: `${p.categoria || "Pagamento"}${
+        p.placa && !`${p.categoria || ""}`.toUpperCase().includes(placaLimpa(p.placa)) ? ` · ${formatPlaca(p.placa)}` : ""
+      }`,
+    })),
+    ...(moto?.contratoAtual?.dataInicio
+      ? [{
+          id: "contrato-atual", data: moto.contratoAtual.dataInicio, tipo: "contrato",
+          nome: `Começou com a ${formatPlaca(moto.placa)} · contrato nº ${moto.contratoAtual.numeroContrato || 1}`,
+          texto: `${formatCurrency(mensalidade)}/mês`,
+        }]
+      : []),
+    ...anteriores.flatMap((h, i) => {
+      const linhas = [];
+      if (h.dataInicio) linhas.push({ id: `ha-ini-${i}`, data: h.dataInicio, tipo: "contrato", nome: `Começou com a ${formatPlaca(h.placa)} · contrato nº ${h.numeroContrato || i + 1}`, texto: `${formatCurrency(h.valorMensal)}/mês` });
+      if (h.encerradoEm) linhas.push({ id: `ha-fim-${i}`, data: h.encerradoEm, tipo: "contrato", nome: `Devolveu a ${formatPlaca(h.placa)}`, texto: "contrato encerrado" });
+      return linhas;
+    }),
+  ].sort((a, b) => (a.data < b.data ? 1 : -1));
+
+  const filtros = [
+    { id: "tudo", label: "Tudo" },
+    { id: "pagamento", label: "Pagamentos" },
+    { id: "contrato", label: "Contratos" },
+  ];
+
+  return (
+    <div className="flex flex-col mbr-fade-in" style={{ gap: "var(--rd-s5)" }}>
+      {/* BARRA DE CIMA */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+        <button onClick={onVoltar} className="flex items-center mbr-hover-grow" style={{ gap: 5, fontSize: 13, fontWeight: 600, color: "var(--rd-text-dim)" }}>
+          <ChevronLeft size={15} strokeWidth={2.75} /> Clientes
+        </button>
+        <span style={{ width: 1, height: 20, background: "var(--rd-border)" }} />
+        <span className="truncate" style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)", minWidth: 0 }}>
+          {cliente.nome || "Sem nome"}
+        </span>
+        <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>{[cliente.cidade, cliente.estado].filter(Boolean).join("/")}</span>
+        <span
+          className="flex items-center"
+          style={{
+            gap: 6, fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 10px", flex: "none",
+            color: moto ? "var(--rd-brand-light)" : "var(--rd-attention)",
+            background: moto ? "var(--rd-brand)" : "var(--rd-attention-bg)" }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: "currentColor" }} />
+          {moto ? `Com a ${formatPlaca(moto.placa)}` : "Sem moto"}
+        </span>
+
+        <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+          {moto && permissoes.podeEditar && (
+            <button
+              onClick={onNovoPagamento}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}
+            >
+              <Plus size={14} strokeWidth={3} /> Lançar pagamento
+            </button>
+          )}
+          {permissoes.podeEditar && (
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setMenuAberto((v) => !v)}
+                aria-label="Mais ações"
+                className="flex items-center justify-center"
+                style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+              >
+                <MoreHorizontal size={16} strokeWidth={2.5} />
+              </button>
+              {menuAberto && (
+                <>
+                  <div className="fixed inset-0" style={{ zIndex: 30 }} onClick={() => setMenuAberto(false)} />
+                  <div
+                    className="flex flex-col"
+                    style={{ position: "absolute", top: 40, right: 0, zIndex: 31, minWidth: 180, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: 6, boxShadow: "0 12px 30px rgba(0,0,0,0.4)" }}
+                  >
+                    <button
+                      onClick={() => { setMenuAberto(false); onEditarCliente(); }}
+                      className="flex items-center text-left"
+                      style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-text)" }}
+                    >
+                      <Pencil size={13} /> Editar cliente
+                    </button>
+                    {!moto && (
+                      <button
+                        onClick={() => { setMenuAberto(false); onExcluirCliente(); }}
+                        className="flex items-center text-left"
+                        style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-negative)" }}
+                      >
+                        <Trash2 size={13} /> Excluir cliente
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mbr-detalhe-grid">
+        {/* ---------- ESQUERDA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+          <CartaoDetalhe>
+            {moto ? (
+              <>
+                <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                  <MotoPlate placa={moto.placa} />
+                  <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                    <span className="truncate" style={{ fontSize: 14, fontWeight: 700, color: "var(--rd-text)" }}>
+                      {moto.modelo || "Moto"}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                      contrato nº {moto.contratoAtual.numeroContrato || 1}
+                      {moto.contratoAtual.dataInicio && ` · desde ${formatDate(moto.contratoAtual.dataInicio)}`}
+                      {moto.contratoAtual.dataTermino && ` · vence ${formatDate(moto.contratoAtual.dataTermino)}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+                    <span
+                      className="flex items-center"
+                      style={{
+                        gap: 6, fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "5px 12px", whiteSpace: "nowrap",
+                        color: pagoEsteMes ? "var(--rd-positive)" : vencido ? "var(--rd-negative)" : "var(--rd-attention)",
+                        background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)" }}
+                    >
+                      {pagoEsteMes ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                      {pagoEsteMes
+                        ? `${mesPorExtenso(mesAtualKey)} pago`
+                        : vencido
+                        ? `Atrasado${diaVenc ? ` (venceu dia ${diaVenc})` : ""}`
+                        : `${mesPorExtenso(mesAtualKey)} em aberto`}
+                    </span>
+                    {permissoes.podeEditar && (
+                      <button
+                        onClick={onEditarContrato}
+                        aria-label="Editar contrato"
+                        title="Editar contrato"
+                        className="flex items-center justify-center"
+                        style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mbr-ficha-stats" style={{ marginTop: "var(--rd-s4)" }}>
+                  <BlocoNumero rotulo="Mensalidade" valor={formatCurrency(mensalidade)} cor="var(--rd-attention-text)" />
+                  <BlocoNumero
+                    rotulo="Vencimento"
+                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : ""}
+                    detalhe={venc ? (venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`) : null}
+                    cor={vencido ? "var(--rd-negative)" : undefined}
+                  />
+                  <BlocoNumero
+                    rotulo="Cliente há"
+                    valor={`${mesesDeCasa ?? 0} ${mesesDeCasa === 1 ? "mês" : "meses"}`}
+                    detalhe={clienteDesde ? `desde ${formatDate(clienteDesde)}` : null}
+                  />
+                  <BlocoNumero rotulo="Já pagou" valor={formatCurrency(recebido)} detalhe={`${pagamentos.length}x`} cor="var(--rd-positive)" />
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--rd-attention-text)" }}>Sem moto no momento</span>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                    {anteriores.length > 0 ? `já alugou ${anteriores.length} vez${anteriores.length === 1 ? "" : "es"}` : "esse cliente ainda não alugou nenhuma moto"}
+                  </span>
+                </div>
+                {permissoes.podeEditar && (
+                  <button
+                    onClick={onVincularMoto}
+                    className="flex items-center"
+                    style={{ gap: 7, marginLeft: "auto", background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}
+                  >
+                    <Plus size={14} strokeWidth={3} /> Vincular a uma moto
+                  </button>
+                )}
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          <CartaoExtrato titulo="Extrato do cliente" itens={extrato} filtros={filtros} rotuloSaldo="Total" />
+        </div>
+
+        {/* ---------- DIREITA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+          <CartaoDetalhe titulo="O que esse cliente rendeu">
+            <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
+              <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-positive)" }}>{formatCurrency(recebido)}</span>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>desde o primeiro contrato</span>
+            </div>
+            <div className="flex flex-col" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+              <LinhaLegendaValor cor="var(--rd-positive)" rotulo="Pagamentos lançados" valor={String(pagamentos.length)} />
+              <LinhaLegendaValor
+                cor="var(--rd-brand-light)"
+                rotulo="Média por mês de contrato"
+                valor={formatCurrency(mesesDeCasa ? recebido / Math.max(1, mesesDeCasa) : recebido)}
+              />
+              <LinhaLegendaValor
+                cor="var(--rd-text-dim)"
+                rotulo="Último pagamento"
+                valor={pagamentos[0] ? formatDate(pagamentos[0].data) : ""}
+              />
+            </div>
+          </CartaoDetalhe>
+
+          <CartaoDetalhe titulo="Motos anteriores">
+            {anteriores.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                {moto ? `Nenhuma. A ${formatPlaca(moto.placa)} é a primeira moto desse cliente.` : "Esse cliente ainda não teve nenhuma moto."}
+              </div>
+            ) : (
+              anteriores.map((h, i) => (
+                <div key={`${h.placa}-${i}`} className="flex items-center" style={{ gap: 10, padding: "9px 0", borderTop: i === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
+                  <MotoPlate placa={h.placa} />
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)", minWidth: 0 }} className="truncate">
+                    {h.dataInicio && formatDate(h.dataInicio)}
+                    {h.encerradoEm && ` até ${formatDate(h.encerradoEm)}`}
+                  </span>
+                  <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "var(--rd-text-muted)", whiteSpace: "nowrap" }}>
+                    {formatCurrency(h.valorMensal)}/mês
+                  </span>
+                </div>
+              ))
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe cresce titulo="Ficha e contato">
+            <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
+              <CampoFicha rotulo="CPF/CNPJ" valor={cliente.cpfCnpj || "não informado"} />
+              <CampoFicha rotulo="Telefone" valor={cliente.telefone || "não informado"} />
+              <CampoFicha rotulo="E-mail" valor={cliente.email || "não informado"} />
+              <CampoFicha rotulo="CEP" valor={cliente.cep || "não informado"} />
+            </div>
+            <div style={{ marginTop: "var(--rd-s3)" }}>
+              <CampoFicha rotulo="Endereço" valor={enderecoCompleto(cliente) || "não informado"} />
+            </div>
+            {cliente.observacoes && (
+              <div style={{ marginTop: "var(--rd-s3)", fontSize: 12, color: "var(--rd-text-muted)" }}>{cliente.observacoes}</div>
+            )}
+            {anexos.length > 0 && (
+              <div className="flex items-center flex-wrap" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+                {anexos.map((a, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onPreview({ url: a.link || a, title: `Contrato · ${formatPlaca(moto.placa)}` })}
+                    className="flex items-center"
+                    style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
+                  >
+                    <FileText size={12} /> {anexos.length > 1 ? `Contrato ${i + 1}` : "Contrato"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </CartaoDetalhe>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientesView({ clientes, persistClientes, motos, persistMotos, lancamentos, persistLancamentos }) {
   const [busca, setBusca] = useState("");
   const [modal, setModal] = useState(null);
   const [expandido, setExpandido] = useState(null);
@@ -1496,7 +2280,12 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
     setModal(null);
   };
 
-  const excluir = async (id) => persistClientes(clientes.filter((c) => c.id !== id));
+  const excluir = async (id) => {
+    const alvo = clientes.find((c) => c.id === id);
+    if (!alvo) return;
+    if (!window.confirm(`Excluir o cliente "${alvo.nome || "sem nome"}"? Isso não dá pra desfazer.`)) return;
+    await persistClientes(clientes.filter((c) => c.id !== id));
+  };
 
   const vincularMoto = async (cliente, dados) => {
     const moto = motos.find((m) => m.id === dados.motoId);
@@ -1511,173 +2300,184 @@ function ClientesView({ clientes, persistClientes, motos, persistMotos }) {
     setModal(null);
   };
 
+  // "Lançar pagamento" na ficha do cliente: mesma entrada do Caixa, já com a moto dele
+  const registrarPagamentoDoCliente = async (moto) => {
+    const valor = Number(moto?.contratoAtual?.valorMensal) || 0;
+    if (!moto || !window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)} hoje?`)) return;
+    await persistLancamentos([
+      ...(lancamentos || []),
+      {
+        id: uid(),
+        data: todayISO(),
+        tipo: "entrada",
+        natureza: "Operacional",
+        categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+        valor,
+        descricao: "",
+        forma: "",
+        motoId: moto.id,
+        parcelas: 1,
+      },
+    ]);
+  };
+
   const filtrados = clientes.filter((c) => {
     const q = busca.toLowerCase();
     return !q || c.nome?.toLowerCase().includes(q) || c.cpfCnpj?.toLowerCase().includes(q);
   });
   const semMotoAgora = clientes.filter((c) => !motos.some((m) => m.contratoAtual?.clienteId === c.id)).length;
 
+  // igual à Frota: clicar num cliente troca a lista pela ficha dele em tela inteira
+  const clienteAberto = clientes.find((c) => c.id === expandido) || null;
+  const motoDoAberto = clienteAberto ? motos.find((m) => m.contratoAtual?.clienteId === clienteAberto.id) : null;
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <h2 style={{ fontFamily: HEAD_FONT, fontSize: 22, fontWeight: 700, color: theme.mint }}>Clientes</h2>
+    <div className="flex flex-col" style={{ gap: "var(--rd-gap-secao)" }}>
+      {clienteAberto ? (
+        <ClienteDetalhe
+          key={clienteAberto.id}
+          cliente={clienteAberto}
+          moto={motoDoAberto}
+          motos={motos}
+          lancamentos={lancamentos}
+          onVoltar={() => setExpandido(null)}
+          onEditarCliente={() => setModal({ mode: "editar", cliente: clienteAberto })}
+          onExcluirCliente={async () => {
+            await excluir(clienteAberto.id);
+            setExpandido(null);
+          }}
+          onEditarContrato={() => setModal({ type: "contrato", moto: motoDoAberto })}
+          onVincularMoto={() => setModal({ mode: "vincular", cliente: clienteAberto })}
+          onNovoPagamento={() => registrarPagamentoDoCliente(motoDoAberto)}
+          onPreview={setPreview}
+        />
+      ) : (
+      <>
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
+        <div className="flex flex-col" style={{ gap: 3 }}>
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)", fontFamily: "var(--rd-font)" }}>Clientes</h1>
+          <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>
+            {clientes.length} cliente{clientes.length === 1 ? "" : "s"} · {semMotoAgora} sem moto no momento
+          </span>
+        </div>
         {permissoes.podeEditar && (
           <button
             onClick={() => setModal({ mode: "novo", cliente: emptyCliente() })}
-            className="flex items-center gap-1 rounded-xl px-3 py-2 text-sm font-semibold"
-            style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+            className="flex items-center"
+            style={{ gap: 8, marginLeft: "auto", background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "10px 18px", fontSize: 13.5, fontWeight: 700 }}
           >
-            <Plus size={16} /> Novo cliente
+            <Plus size={15} strokeWidth={3} /> Novo cliente
           </button>
         )}
       </div>
-      <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        {clientes.length} cliente{clientes.length === 1 ? "" : "s"}
-        {" · "}
-        {semMotoAgora} sem moto no momento
-      </div>
 
-      <div className="relative mb-4">
-        <Search size={15} style={{ position: "absolute", left: 10, top: 10, color: theme.textMuted }} />
+      <div className="relative">
+        <Search size={15} strokeWidth={2.75} style={{ position: "absolute", left: 14, top: 12, color: "var(--rd-text-dim)" }} />
         <input
-          style={{ ...inputStyle, paddingLeft: 32, marginBottom: 0 }}
+          style={{
+            width: "100%",
+            background: "var(--rd-surface-2)",
+            border: "1px solid var(--rd-border)",
+            borderRadius: 12,
+            padding: "10px 14px 10px 38px",
+            color: "var(--rd-text)",
+            fontSize: 13.5,
+            fontFamily: "var(--rd-font)" }}
           placeholder="Buscar por nome ou CPF/CNPJ"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
         />
       </div>
 
-      {filtrados.length === 0 && (
-        <div className="rounded-2xl p-6 text-center" style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT }}>
+      {filtrados.length === 0 ? (
+        <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", color: "var(--rd-text-dim)", fontFamily: "var(--rd-font)" }}>
           Nenhum cliente encontrado.
         </div>
-      )}
+      ) : (
+        <>
+          <div className="mbr-desktop-grid mbr-tab-head mbr-grid-clientes">
+            <span>Cliente</span>
+            <span>CPF/CNPJ</span>
+            <span>Contato</span>
+            <span>Moto</span>
+            <span></span>
+          </div>
 
-      <div className="flex flex-col gap-2">
-        {filtrados.map((c) => {
+          {/* uma tabela só, com as linhas separadas por um fio — igual à Frota */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            {filtrados.map((c, iLinha) => {
           const motoVinculada = motos.find((m) => m.contratoAtual?.clienteId === c.id);
-          const aberto = expandido === c.id;
           return (
-            <div key={c.id} className="rounded-2xl overflow-hidden" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-              <button className="w-full flex items-center gap-3 justify-between px-4 py-3 text-left" onClick={() => setExpandido(aberto ? null : c.id)}>
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="flex items-center justify-center flex-shrink-0"
-                    style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}
-                  >
-                    <Users size={16} color={motoVinculada ? theme.mint : theme.textGhost} />
-                  </div>
-                  <div className="flex flex-col gap-1.5 min-w-0">
-                    <div style={{ fontFamily: HEAD_FONT, fontSize: 17, color: theme.text }}>{c.nome || "Sem nome"}</div>
-                    {motoVinculada ? (
-                      <Badge color={theme.mint} icon={Bike} label={`Com a moto ${formatPlaca(motoVinculada.placa)}`} />
-                    ) : (
-                      <Badge color={theme.amber} icon={Clock} label="Sem moto no momento" />
-                    )}
-                  </div>
+            <div key={c.id} style={{ borderTop: iLinha === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
+              <button
+                className="w-full text-left mbr-desktop-grid mbr-tab-row mbr-grid-clientes"
+                onClick={() => setExpandido(c.id)}
+              >
+                <div className="flex flex-col min-w-0" style={{ gap: 4 }}>
+                  <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
+                  <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{[c.cidade, c.estado].filter(Boolean).join("/") || ""}</span>
                 </div>
-                {aberto ? <ChevronUp size={18} color={theme.textMuted} /> : <ChevronDown size={18} color={theme.textMuted} />}
+                <span className="truncate" style={{ minWidth: 0, fontFamily: "ui-monospace, monospace", fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                  {c.cpfCnpj || ""}
+                </span>
+                <div className="flex flex-col min-w-0" style={{ gap: 4 }}>
+                  <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>{c.telefone || ""}</span>
+                  <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{c.email || ""}</span>
+                </div>
+                {motoVinculada ? (
+                  <div className="flex items-center min-w-0" style={{ gap: 8 }}>
+                    <span
+                      style={{
+                        fontFamily: "ui-monospace, monospace",
+                        fontSize: 11.5,
+                        fontWeight: 700,
+                        color: "var(--rd-brand-light)",
+                        background: "var(--rd-brand)",
+                        borderRadius: 999,
+                        padding: "3px 9px" }}
+                    >
+                      {formatPlaca(motoVinculada.placa)}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{formatCurrency(motoVinculada.contratoAtual.valorMensal)}</span>
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--rd-attention-text)" }}>Sem moto no momento</span>
+                )}
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: motoVinculada ? "var(--rd-brand-light)" : "var(--rd-attention)", justifySelf: "end" }}>
+                  {motoVinculada ? "Abrir" : "Vincular"}
+                </span>
               </button>
 
-              <Collapse open={aberto}>
-                <div className="px-4 pb-4 text-sm" style={{ fontFamily: BODY_FONT }}>
-                  {motoVinculada ? (
-                    <div className="mb-5">
-                      <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: theme.textFaint }}>
-                        Contrato ativo
-                      </div>
-                      <div className="rounded-xl p-3" style={{ background: theme.card2 }}>
-                        <div className="flex items-center justify-between mb-1">
-                          <MotoPlate placa={motoVinculada.placa} />
-                          <span style={{ color: theme.amber, fontFamily: HEAD_FONT, fontSize: 17 }}>
-                            {formatCurrency(motoVinculada.contratoAtual.valorMensal)}/mês
-                          </span>
-                        </div>
-                        <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                          Contrato nº {motoVinculada.contratoAtual.numeroContrato}
-                          {diaVencimentoDoContrato(motoVinculada.contratoAtual) && ` · pagamento todo dia ${diaVencimentoDoContrato(motoVinculada.contratoAtual)}`}
-                          {motoVinculada.contratoAtual.dataTermino && ` · até ${formatDate(motoVinculada.contratoAtual.dataTermino)}`}
-                        </div>
-                        <div className="flex items-center gap-3 mt-2 flex-wrap">
-                          <ContratoAnexosButton
-                            anexos={contratoAnexosOf(motoVinculada.contratoAtual)}
-                            tituloPreview={`Contrato — ${formatPlaca(motoVinculada.placa)}`}
-                            onAbrir={(url, title) => setPreview({ url, title })}
-                          />
-                          {permissoes.podeEditar && (
-                            <button
-                              onClick={() => setModal({ type: "contrato", moto: motoVinculada })}
-                              className="inline-flex items-center gap-1 text-xs mbr-hover-grow"
-                              style={{ color: theme.text }}
-                            >
-                              <Pencil size={12} /> Editar contrato
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    permissoes.podeEditar && (
-                      <div className="mb-5">
-                        <button
-                          onClick={() => setModal({ mode: "vincular", cliente: c })}
-                          className="text-xs font-semibold rounded-xl px-3"
-                          style={{ background: theme.mint, color: theme.text, minHeight: 44 }}
-                        >
-                          Vincular a uma moto disponível
-                        </button>
-                      </div>
-                    )
-                  )}
-
-                  <div className="mb-5">
-                    <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: theme.textFaint }}>
-                      Contato
-                    </div>
-                    <div className="flex flex-col gap-1.5" style={{ color: theme.textMuted }}>
-                      {c.cpfCnpj && <span>CPF/CNPJ: {c.cpfCnpj}</span>}
-                      {c.telefone && (
-                        <span className="flex items-center gap-1">
-                          <Phone size={12} /> {c.telefone}
-                        </span>
-                      )}
-                      {c.email && (
-                        <span className="flex items-center gap-1">
-                          <Mail size={12} /> {c.email}
-                        </span>
-                      )}
-                      <span className="flex items-center gap-1">
-                        <MapPin size={12} /> {enderecoCompleto(c)} {c.cep ? `— CEP ${c.cep}` : ""}
-                      </span>
-                    </div>
+              <button
+                className="w-full mbr-mobile-only flex items-center justify-between text-left"
+                onClick={() => setExpandido(c.id)}
+                style={{ gap: 12, padding: "14px 16px" }}
+              >
+                <div className="flex items-center min-w-0" style={{ gap: 12 }}>
+                  <div className="flex items-center justify-center flex-shrink-0" style={{ width: 32, height: 32, borderRadius: 9, background: "var(--rd-surface-2)" }}>
+                    <Users size={16} color={motoVinculada ? "var(--rd-brand-light)" : "var(--rd-attention)"} />
                   </div>
-
-                  {permissoes.podeEditar && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setModal({ mode: "editar", cliente: c })}
-                        className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                        style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                      >
-                        <Pencil size={12} /> Editar
-                      </button>
-                      {!motoVinculada && (
-                        <button
-                          onClick={() => excluir(c.id)}
-                          className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                          style={{ border: `1px solid ${theme.cardBorder}`, color: theme.coral }}
-                        >
-                          <Trash2 size={12} /> Excluir
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  <div className="flex flex-col min-w-0" style={{ gap: 3 }}>
+                    <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{c.nome || "Sem nome"}</span>
+                    <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+                      {motoVinculada ? `Com a moto ${formatPlaca(motoVinculada.placa)}` : "Sem moto no momento"}
+                    </span>
+                  </div>
                 </div>
-              </Collapse>
+                <span style={{ fontSize: 12, fontWeight: 700, color: motoVinculada ? "var(--rd-brand-light)" : "var(--rd-attention)", flex: "none" }}>
+                  {motoVinculada ? "Abrir" : "Vincular"}
+                </span>
+              </button>
+
             </div>
           );
-        })}
-      </div>
+            })}
+          </div>
+        </>
+      )}
+
+      </>
+      )}
 
       {(modal?.mode === "novo" || modal?.mode === "editar") && (
         <ClienteFormModal
@@ -1833,8 +2633,7 @@ function BorraProgressiva({ lado }) {
               backdropFilter: "blur(0.8px)",
               WebkitBackdropFilter: "blur(0.8px)",
               maskImage: mask,
-              WebkitMaskImage: mask,
-            }}
+              WebkitMaskImage: mask }}
           />
         );
       })}
@@ -1855,15 +2654,20 @@ function MapToolButton({ icon: Icon, label, onClick, active }) {
         background: active ? theme.mint : hexToRgba(theme.card, 0.92),
         color: active ? theme.mintText : theme.text,
         border: `1px solid ${theme.cardBorder}`,
-        boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
-      }}
+        boxShadow: "0 1px 4px rgba(0,0,0,0.3)" }}
     >
       <Icon size={16} />
     </button>
   );
 }
 
-function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0 }) {
+// "mini": versão de miniatura, pro cartão "Onde estão" da Visão geral — mesmo mapa e
+// mesmos pinos, só que sem controles, sem popup, sem gestos (o cartão inteiro é um
+// atalho pra tela de Rastreamento) e atualizando com menos frequência
+const TrackingMap = forwardRef(function TrackingMap(
+  { link, filterPlaca, height = 320, rounded = true, motos, clientes, topInset = 0, bottomInset = 0, mini = false, onResumo, onDevices, onSelecionar, selecionadoId, semControles = false },
+  ref
+) {
   const containerRef = useRef(null);
   const mapObjRef = useRef(null);
   const markersRef = useRef({});
@@ -1877,6 +2681,19 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
   const clientesRef = useRef(clientes);
   const [status, setStatus] = useState("carregando"); // carregando | ok | erro
   const [mostrarRastro, setMostrarRastro] = useState(false);
+  const onResumoRef = useRef(onResumo);
+  useEffect(() => {
+    onResumoRef.current = onResumo;
+  }, [onResumo]);
+  const onDevicesRef = useRef(onDevices);
+  useEffect(() => {
+    onDevicesRef.current = onDevices;
+  }, [onDevices]);
+  const onSelecionarRef = useRef(onSelecionar);
+  useEffect(() => {
+    onSelecionarRef.current = onSelecionar;
+  }, [onSelecionar]);
+  const [satelite, setSatelite] = useState(false);
 
   useEffect(() => {
     mostrarRastroRef.current = mostrarRastro;
@@ -1901,12 +2718,14 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       center: [-47.0, -22.9],
       zoom: 6,
       attributionControl: false,
+      interactive: !mini,
     });
     mapObjRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    // zoom no canto de baixo à direita: em cima ele brigava com o cartão da moto
+    if (!mini) map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     // atribuição ao OpenStreetMap/MapLibre é exigida pela licença dos dados do mapa —
     // "compact" mantém isso, só troca a faixa cheia por um botão discreto "i"
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
 
     // se a pessoa arrastar o mapa ou der zoom manualmente, para de seguir a moto —
     // "originalEvent" só existe quando o movimento veio de um gesto do usuário (mouse/touch/
@@ -1923,9 +2742,16 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         const data = await res.json();
         if (cancelled) return;
 
-        const devices = Object.values(data).filter((d) =>
-          filterPlaca ? (d.name || "").toUpperCase().startsWith(filterPlaca.toUpperCase()) : true
-        );
+        // a placa vem do rastreador do jeito que foi cadastrada lá ("UGH-2J93 - Honda"),
+        // e no app ela é guardada sem traço — comparar cru fazia a moto não ser
+        // reconhecida ("moto não cadastrada") e o mapa da ficha vir vazio
+        const devices = Object.values(data)
+          // a Melocaliza às vezes devolve uma entrada vazia (sem nome e sem posição);
+          // ela entrava na contagem da frota e aparecia como "moto não cadastrada"
+          .filter((d) => d && d.name && parseFloat(d.lat) && parseFloat(d.lng))
+          .filter((d) =>
+            filterPlaca ? placaLimpa((d.name || "").split(" - ")[0]) === placaLimpa(filterPlaca) : true
+          );
 
         const bounds = new maplibregl.LngLatBounds();
         const vistos = new Set();
@@ -1952,7 +2778,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
             // no lugar antigo, "descolando" da moto conforme ela andava
             if (popupChaveRef.current === chave && popupRef.current) {
               popupRef.current.setLngLat([lng, lat]);
-              const moto = motosRef.current?.find((m) => (m.placa || "").toUpperCase() === placa.toUpperCase());
+              const moto = motosRef.current?.find((m) => placaLimpa(m.placa) === placaLimpa(placa));
               const cliente = moto?.contratoAtual ? clientesRef.current?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
               popupRef.current.setHTML(rastreioPopupHtml(placa, d, moto, cliente?.nome));
             }
@@ -1961,20 +2787,29 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
             el.className = "mbr-map-marker";
             el.innerHTML = rastreioMarkerHtml(placa, cor);
             const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(map);
-            markersRef.current[chave] = { marker, placa, cor, device: d };
+            markersRef.current[chave] = { marker, placa, cor, device: d, el };
 
-            el.addEventListener("click", (ev) => {
+            // na miniatura o pino não abre nada — o clique é do cartão, que leva pro mapa
+            if (!mini) el.addEventListener("click", (ev) => {
               ev.stopPropagation();
               const entry = markersRef.current[chave];
               if (!entry) return;
               const ll = entry.marker.getLngLat();
+              // na tela de Rastreio quem mostra os detalhes é o cartão lateral (React),
+              // então o pino só avisa quem foi clicado em vez de abrir o balão do mapa
+              if (onSelecionarRef.current) {
+                seguindoRef.current = chave;
+                map.flyTo({ center: ll, zoom: 15, duration: 600 });
+                onSelecionarRef.current(chave, entry.device);
+                return;
+              }
               // ao clicar numa moto, a câmera passa a "segui-la": a cada atualização de
               // posição (tick) ela recentraliza sozinha, até a pessoa arrastar/dar zoom
               // manualmente no mapa (aí para de seguir — ver listeners de dragstart/zoomstart)
               seguindoRef.current = chave;
               map.flyTo({ center: ll, zoom: 16, duration: 600 });
 
-              const moto = motosRef.current?.find((m) => (m.placa || "").toUpperCase() === entry.placa.toUpperCase());
+              const moto = motosRef.current?.find((m) => placaLimpa(m.placa) === placaLimpa(entry.placa));
               const cliente = moto?.contratoAtual ? clientesRef.current?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
 
               if (popupRef.current) popupRef.current.remove();
@@ -2033,7 +2868,9 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         // ela de perto). Depois disso, só recentraliza no botão "Centralizar".
         if (!bounds.isEmpty() && primeiraCargaRef.current) {
           primeiraCargaRef.current = false;
-          if (devices.length === 1) {
+          if (mini) {
+            map.fitBounds(bounds, { padding: 34, maxZoom: 11, duration: 400 });
+          } else if (devices.length === 1) {
             map.easeTo({ center: bounds.getCenter(), zoom: 12, duration: 500 });
           } else {
             // padding maior no topo/base — os pinos têm uma etiqueta desenhada por cima
@@ -2048,6 +2885,15 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
           }
         }
 
+        // quem está DE FATO em movimento é o rastreador verde — amarelo é moto parada e
+        // vermelho é offline. Antes o cartão mostrava as motos alugadas como "em
+        // movimento", que é outra coisa: alugada e parada no pátio do cliente é comum.
+        const emMovimento = devices.filter((d) => d.icon_color === "green").length;
+        onResumoRef.current?.({ emMovimento, total: devices.length });
+        // a tela de Rastreio monta a lista lateral com esses mesmos dados — assim a
+        // lista e os pinos nunca discordam, é a mesma leitura
+        onDevicesRef.current?.(devices);
+
         setStatus("ok");
       } catch {
         if (!cancelled) setStatus("erro");
@@ -2056,7 +2902,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
 
     tickRef.current = tick;
     map.on("load", tick);
-    const interval = setInterval(tick, 20000);
+    const interval = setInterval(tick, mini ? 60000 : 20000);
 
     return () => {
       cancelled = true;
@@ -2069,7 +2915,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       mapObjRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [link, filterPlaca]);
+  }, [link, filterPlaca, mini]);
 
   const centralizar = () => {
     seguindoRef.current = null;
@@ -2101,6 +2947,52 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
     });
   };
 
+  // o pino da moto escolhida na lista ganha um anel — é o que liga as duas metades da
+  // tela (clicou na lista, o mapa mostra qual é)
+  useEffect(() => {
+    Object.entries(markersRef.current).forEach(([chave, entry]) => {
+      if (!entry.el) return;
+      entry.el.classList.toggle("mbr-map-marker--ativo", chave === String(selecionadoId || ""));
+    });
+  }, [selecionadoId]);
+
+  // SATÉLITE — camada de imagem por cima do mapa vetorial, abaixo dos rótulos (assim
+  // as ruas e cidades continuam legíveis em cima da foto)
+  const alternarSatelite = () => {
+    const map = mapObjRef.current;
+    const novo = !satelite;
+    setSatelite(novo);
+    if (!map) return;
+    if (novo && !map.getSource("satelite")) {
+      const primeiroSimbolo = (map.getStyle()?.layers || []).find((l) => l.type === "symbol")?.id;
+      map.addSource("satelite", {
+        type: "raster",
+        tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize: 256,
+        attribution: "Imagens &copy; Esri",
+      });
+      map.addLayer({ id: "satelite", type: "raster", source: "satelite", paint: { "raster-opacity": 0.92 } }, primeiroSimbolo);
+    }
+    if (map.getLayer("satelite")) map.setLayoutProperty("satelite", "visibility", novo ? "visible" : "none");
+  };
+
+  useImperativeHandle(ref, () => ({
+    centralizar,
+    atualizar: () => tickRef.current?.(),
+    alternarRastro,
+    alternarSatelite,
+    rastro: mostrarRastro,
+    satelite,
+    status,
+    focar: (chave) => {
+      const entry = markersRef.current[String(chave)];
+      const map = mapObjRef.current;
+      if (!entry || !map) return;
+      seguindoRef.current = String(chave);
+      map.flyTo({ center: entry.marker.getLngLat(), zoom: 15, duration: 700 });
+    },
+  }));
+
   return (
     <div
       className={rounded ? "mbr-map rounded-2xl overflow-hidden relative" : "mbr-map overflow-hidden relative"}
@@ -2108,30 +3000,42 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
         border: rounded ? `1px solid ${theme.cardBorder}` : "none",
         height,
         "--mbr-top-inset": `${topInset}px`,
-        "--mbr-bottom-inset": `${bottomInset}px`,
-      }}
+        "--mbr-bottom-inset": `${bottomInset}px` }}
     >
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-      <div className="absolute left-3 flex gap-3 z-10" style={{ top: 12 + topInset }}>
-        <MapToolButton icon={Crosshair} label="Centralizar" onClick={centralizar} />
-        <MapToolButton icon={Route} label="Mostrar rastro" active={mostrarRastro} onClick={alternarRastro} />
-        <MapToolButton icon={RefreshCw} label="Atualizar agora" onClick={() => tickRef.current?.()} />
-      </div>
-
-      <div
-        className="absolute left-3 rounded-xl px-3 py-2 flex flex-col gap-1 z-10"
-        style={{ bottom: 12 + bottomInset, background: hexToRgba(theme.card, 0.92), border: `1px solid ${theme.cardBorder}` }}
-      >
-        {RASTREIO_LEGENDA.map((l) => (
-          <div key={l.cor} className="flex items-center gap-1.5 text-xs" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-            <span
-              className="rounded-full flex-shrink-0"
-              style={{ width: 9, height: 9, background: RASTREIO_STATUS_COR[l.cor] }}
-            />
-            {l.label}
+      {!mini && !semControles && (
+        <>
+          <div className="absolute left-3 flex gap-3 z-10" style={{ top: 12 + topInset }}>
+            <MapToolButton icon={Crosshair} label="Centralizar" onClick={centralizar} />
+            <MapToolButton icon={Route} label="Mostrar rastro" active={mostrarRastro} onClick={alternarRastro} />
+            <MapToolButton icon={RefreshCw} label="Atualizar agora" onClick={() => tickRef.current?.()} />
           </div>
-        ))}
-      </div>
+
+          <div
+            className="absolute left-3 rounded-xl px-3 py-2 flex flex-col gap-1 z-10"
+            style={{ bottom: 12 + bottomInset, background: hexToRgba(theme.card, 0.92), border: `1px solid ${theme.cardBorder}` }}
+          >
+            {RASTREIO_LEGENDA.map((l) => (
+              <div key={l.cor} className="flex items-center gap-1.5 text-xs" style={{ color: theme.text, fontFamily: BODY_FONT }}>
+                <span
+                  className="rounded-full flex-shrink-0"
+                  style={{ width: 9, height: 9, background: RASTREIO_STATUS_COR[l.cor] }}
+                />
+                {l.label}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {mini && status === "carregando" && (
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ fontSize: 12, color: "var(--rd-text-dim)", background: "var(--rd-surface-2)" }}
+        >
+          carregando o mapa...
+        </div>
+      )}
 
       {status === "erro" && (
         <div
@@ -2143,26 +3047,7 @@ function TrackingMap({ link, filterPlaca, height = 320, rounded = true, motos, c
       )}
     </div>
   );
-}
-
-function MotoTrackingBlock({ link, placa }) {
-  const [aberto, setAberto] = useState(false);
-  return (
-    <div className="mb-3">
-      <button
-        type="button"
-        onClick={() => setAberto((v) => !v)}
-        className="flex items-center gap-1.5 text-xs font-semibold rounded-xl px-3"
-        style={{ background: hexToRgba(theme.mint, 0.16), color: theme.mint, minHeight: 44 }}
-      >
-        <MapPin size={13} /> {aberto ? "Ocultar localização" : "Ver localização em tempo real"}
-      </button>
-      <Collapse open={aberto}>
-        <div className="mt-2">{aberto && <TrackingMap link={link} filterPlaca={placa} height={280} />}</div>
-      </Collapse>
-    </div>
-  );
-}
+});
 
 function MotoFormModal({ moto, onClose, onSave, title }) {
   const [form, setForm] = useState({
@@ -2217,7 +3102,7 @@ function MotoFormModal({ moto, onClose, onSave, title }) {
       <Row2>
         <div>
           <FieldLabel>Data da compra</FieldLabel>
-          <input type="date" style={dateInputStyle} value={form.dataCompra} onChange={set("dataCompra")} />
+          <CampoData value={form.dataCompra} onChange={set("dataCompra")} />
         </div>
         <div>
           <FieldLabel>Valor da compra</FieldLabel>
@@ -2262,7 +3147,7 @@ function MotoFormModal({ moto, onClose, onSave, title }) {
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
         Na Melocaliza: Compartilhar localização → Novo → escolha esta moto → validade "Nenhum" → copie o link gerado.
       </div>
-      <button onClick={() => onSave(form)} className="w-full rounded-xl py-2 font-semibold mt-1" style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}>
+      <button onClick={() => onSave(form)} className="w-full rounded-xl py-2 font-semibold mt-1" style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}>
         Salvar
       </button>
     </Modal>
@@ -2321,7 +3206,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
 
   return (
     <Modal
-      title={editando ? `Editar contrato — ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}` : `Novo contrato — ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}`}
+      title={editando ? `Editar contrato · ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}` : `Novo contrato · ${moto.placa ? formatPlaca(moto.placa) : moto.modelo}`}
       onClose={onClose}
     >
       {editando ? (
@@ -2385,7 +3270,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
           )}
           {cepStatus === "nao-encontrado" && (
             <div className="text-xs -mt-2 mb-3" style={{ color: theme.coral, fontFamily: BODY_FONT }}>
-              CEP não encontrado — preencha o endereço manualmente.
+              CEP não encontrado. Preencha o endereço manualmente.
             </div>
           )}
           <FieldLabel>Logradouro</FieldLabel>
@@ -2436,7 +3321,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
       <Row2>
         <div>
           <FieldLabel>Início</FieldLabel>
-          <input type="date" style={dateInputStyle} value={contrato.dataInicio} onChange={setC("dataInicio")} />
+          <CampoData value={contrato.dataInicio} onChange={setC("dataInicio")} />
         </div>
         <div>
           <FieldLabel>Dia de vencimento</FieldLabel>
@@ -2451,9 +3336,9 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
         </div>
       </Row2>
       <FieldLabel>Data de término (opcional)</FieldLabel>
-      <input type="date" style={dateInputStyle} value={contrato.dataTermino || ""} onChange={setC("dataTermino")} />
+      <CampoData value={contrato.dataTermino || ""} onChange={setC("dataTermino")} limpavel />
       <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        Se o aluguel tiver prazo definido, preenche aqui — assim a previsão em "Futuros" soma só até essa data. Deixe em branco se for indefinido.
+        Se o aluguel tiver prazo definido, preenche aqui: a previsão em "Agendamentos" soma só até essa data. Deixe em branco se for indefinido.
       </div>
       <Row2>
         <div>
@@ -2482,7 +3367,7 @@ function ContratoModal({ moto, clientes, onClose, onSave, editando }) {
           })
         }
         className="w-full rounded-xl py-2 font-semibold mt-1"
-        style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+        style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
       >
         {editando ? "Salvar contrato" : "Confirmar aluguel"}
       </button>
@@ -2505,7 +3390,7 @@ function CustoExtraModal({ onClose, onSave }) {
   return (
     <Modal title="Novo custo da moto" onClose={onClose}>
       <FieldLabel>Data</FieldLabel>
-      <input type="date" style={dateInputStyle} value={form.data} onChange={set("data")} />
+      <CampoData value={form.data} onChange={set("data")} />
       <FieldLabel>Descrição</FieldLabel>
       <input style={inputStyle} value={form.descricao} onChange={set("descricao")} placeholder="Despachante, documentação, comissão..." />
       <FieldLabel>Valor gasto</FieldLabel>
@@ -2513,7 +3398,7 @@ function CustoExtraModal({ onClose, onSave }) {
       <button
         onClick={() => onSave({ ...form, valorGasto: Number(form.valorGasto) || 0 })}
         className="w-full rounded-xl py-2 font-semibold mt-1"
-        style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+        style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
       >
         Salvar
       </button>
@@ -2528,7 +3413,7 @@ function ManutencaoModal({ onClose, onSave }) {
   return (
     <Modal title="Nova manutenção" onClose={onClose}>
       <FieldLabel>Data</FieldLabel>
-      <input type="date" style={dateInputStyle} value={form.data} onChange={set("data")} />
+      <CampoData value={form.data} onChange={set("data")} />
       <FieldLabel>Tipo de manutenção</FieldLabel>
       <input style={inputStyle} value={form.tipo} onChange={set("tipo")} placeholder="Troca de óleo, pneu..." />
       <Row2>
@@ -2541,14 +3426,13 @@ function ManutencaoModal({ onClose, onSave }) {
           <input style={inputStyle} value={form.local} onChange={set("local")} />
         </div>
       </Row2>
-      <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-        <input type="checkbox" checked={form.garantia} onChange={(e) => setForm({ ...form, garantia: e.target.checked })} />
+      <Checkbox checked={form.garantia} onChange={(e) => setForm({ ...form, garantia: e.target.checked })}>
         Coberto por garantia
-      </label>
+      </Checkbox>
       <button
         onClick={() => onSave({ ...form, valorGasto: Number(form.valorGasto) || 0 })}
         className="w-full rounded-xl py-2 font-semibold mt-1"
-        style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+        style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
       >
         Salvar
       </button>
@@ -2609,7 +3493,7 @@ function ConsultaPlacaModal({ onClose }) {
           onClick={consultar}
           disabled={status === "carregando"}
           className="rounded-xl px-4 font-semibold text-sm"
-          style={{ background: theme.mint, color: theme.text, fontWeight: 600, opacity: status === "carregando" ? 0.6 : 1 }}
+          style={{ background: theme.mint, color: theme.mintText, fontWeight: 600, opacity: status === "carregando" ? 0.6 : 1 }}
         >
           Consultar
         </button>
@@ -2647,10 +3531,688 @@ function ConsultaPlacaModal({ onClose }) {
   );
 }
 
-function MotosView({ motos, persist, clientes, persistClientes, config, lancamentos, persistLancamentos }) {
+/* ===========================================================
+   FICHA DA MOTO — tela inteira, no lugar da lista da Frota
+   Abre quando a pessoa clica numa moto: em cima uma barra com a placa e as
+   ações, embaixo duas colunas (extrato de um lado, resultado/histórico/ficha
+   do outro). Substituiu a ficha que abria por dentro da linha da tabela.
+=========================================================== */
+const CORES_EXTRATO = {
+  pagamento: "var(--rd-positive)",
+  manutencao: "var(--rd-attention)",
+  custo: "var(--rd-negative)",
+  contrato: "var(--rd-text-dim)",
+};
+const ROTULO_EXTRATO = { pagamento: "Pagamento", manutencao: "Manutenção", custo: "Custo", contrato: "Contrato" };
+
+function CartaoDetalhe({ titulo, acao, children, padding, cresce }) {
+  return (
+    <div
+      className={cresce ? "mbr-cresce" : undefined}
+      style={{
+        background: "var(--rd-surface)",
+        border: "1px solid var(--rd-border)",
+        borderRadius: 16,
+        padding: padding || "var(--rd-s5)" }}
+    >
+      {titulo && (
+        <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s4)" }}>
+          <span style={RD_LABEL}>{titulo}</span>
+          {acao}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+function BlocoNumero({ rotulo, valor, detalhe, cor }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 5 }}>
+        {rotulo}
+      </div>
+      <div className="flex items-baseline flex-wrap" style={{ gap: 6 }}>
+        <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em", color: cor || "var(--rd-text)" }}>{valor}</span>
+        {detalhe && <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{detalhe}</span>}
+      </div>
+    </div>
+  );
+}
+
+function LinhaExtrato({ item, onEditar, onExcluir }) {
+  return (
+    <div className="flex items-center" style={{ gap: 10, padding: "10px 0", borderTop: "1px solid var(--rd-row-border)" }}>
+      <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)", flex: "none", width: 66, fontFamily: "ui-monospace, monospace" }}>
+        {formatDateCurto(item.data)}
+      </span>
+      <span style={{ width: 7, height: 7, borderRadius: 999, flex: "none", background: CORES_EXTRATO[item.tipo] }} />
+      <span className="truncate" style={{ fontSize: 13, color: "var(--rd-text)", minWidth: 0 }}>{item.nome}</span>
+      <span
+        style={{
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: CORES_EXTRATO[item.tipo],
+          border: "1px solid var(--rd-border)",
+          borderRadius: 999,
+          padding: "2px 7px",
+          whiteSpace: "nowrap",
+          flex: "none" }}
+      >
+        {ROTULO_EXTRATO[item.tipo]}
+      </span>
+      <span
+        className="mbr-extrato-valor"
+        style={{
+          marginLeft: "auto",
+          fontSize: 13,
+          fontWeight: 700,
+          whiteSpace: "nowrap",
+          color: item.tipo === "pagamento" ? "var(--rd-positive)" : item.tipo === "contrato" ? "var(--rd-text)" : item.tipo === "manutencao" ? "var(--rd-attention)" : "var(--rd-negative)" }}
+      >
+        {item.texto || `${item.sinal > 0 ? "+" : "−"} ${formatCurrency(item.valor)}`}
+      </span>
+      <span className="flex items-center" style={{ gap: 4, flex: "none" }}>
+        {onEditar && (
+          <button onClick={onEditar} title="Editar" className="flex items-center justify-center mbr-hover-grow" style={{ width: 26, height: 26, color: "var(--rd-text-faint)" }}>
+            <Pencil size={13} />
+          </button>
+        )}
+        {onExcluir && (
+          <button onClick={onExcluir} title="Excluir" className="flex items-center justify-center mbr-hover-grow" style={{ width: 26, height: 26, color: "var(--rd-negative)" }}>
+            <Trash2 size={13} />
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+
+// barra de três pedaços: quanto a moto já devolveu contra o que ela custou
+function BarraResultado({ recebido, custos, manutencao }) {
+  const total = Math.max(1, Number(recebido || 0) + Number(custos || 0) + Number(manutencao || 0));
+  const pedaco = (v, cor) => (
+    <span style={{ width: `${(Number(v || 0) / total) * 100}%`, background: cor, display: "block" }} />
+  );
+  return (
+    <div className="flex" style={{ height: 7, borderRadius: 999, overflow: "hidden", background: "var(--rd-surface-2)", marginTop: "var(--rd-s4)" }}>
+      {pedaco(recebido, "var(--rd-positive)")}
+      {pedaco(custos, "var(--rd-negative)")}
+      {pedaco(manutencao, "var(--rd-attention)")}
+    </div>
+  );
+}
+
+function LinhaLegendaValor({ cor, rotulo, valor }) {
+  return (
+    <div className="flex items-center" style={{ gap: 9 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 999, background: cor, flex: "none" }} />
+      <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)", minWidth: 0 }}>{rotulo}</span>
+      <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)", whiteSpace: "nowrap" }}>{valor}</span>
+    </div>
+  );
+}
+
+function CampoFicha({ rotulo, valor }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: "var(--rd-text-faint)", marginBottom: 2 }}>{rotulo}</div>
+      <div className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text)", fontFamily: "ui-monospace, monospace" }}>{valor}</div>
+    </div>
+  );
+}
+
+/* EXTRATO — a lista única (pagamentos, gastos e contratos) das fichas de moto e de
+   cliente. Abre já no mês mais recente com movimento, senão uma moto de dois anos
+   despeja quarenta linhas de uma vez: as setas andam mês a mês, "histórico" solta
+   tudo, e uma lista longa fica cortada em 8 linhas com um "ver mais" embaixo. */
+function CartaoExtrato({ titulo, itens, filtros, rotuloSaldo = "Saldo" }) {
+  const LIMITE = 8;
+  const [tipo, setTipo] = useState("tudo");
+  const [expandido, setExpandido] = useState(false);
+
+  const mesAtual = todayISO().slice(0, 7);
+  const mesesComItens = useMemo(
+    () => [...new Set((itens || []).map((i) => (i.data || "").slice(0, 7)).filter(Boolean))].sort(),
+    [itens]
+  );
+  const mesMaisNovo = mesesComItens[mesesComItens.length - 1];
+  // null = histórico inteiro
+  const [mes, setMes] = useState(() => (mesesComItens.includes(mesAtual) ? mesAtual : mesMaisNovo || mesAtual));
+
+  const mesMin = mesesComItens[0] || mesAtual;
+  const mesMax = mesMaisNovo && mesMaisNovo > mesAtual ? mesMaisNovo : mesAtual;
+  const vizinho = (passo) => {
+    const [a, m] = (mes || mesAtual).split("-").map(Number);
+    const d = new Date(a, m - 1 + passo, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const podeVoltar = !!mes && mes > mesMin;
+  const podeAvancar = !!mes && mes < mesMax;
+  const irPara = (novo) => { setMes(novo); setExpandido(false); };
+
+  const doMes = mes ? (itens || []).filter((i) => (i.data || "").slice(0, 7) === mes) : itens || [];
+  const filtrados = tipo === "tudo" ? doMes : doMes.filter((i) => i.tipo === tipo);
+  const visiveis = expandido ? filtrados : filtrados.slice(0, LIMITE);
+  const escondidas = filtrados.length - visiveis.length;
+  const soma = filtrados.reduce((s, i) => s + (i.sinal || 0) * Number(i.valor || 0), 0);
+
+  return (
+    <CartaoDetalhe
+      cresce
+      titulo={titulo}
+      acao={
+        <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+          <div
+            className="flex items-center"
+            style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
+          >
+            <button
+              onClick={() => (mes ? podeVoltar && irPara(vizinho(-1)) : irPara(mesMaisNovo || mesAtual))}
+              disabled={!!mes && !podeVoltar}
+              aria-label="Mês anterior"
+              className="flex items-center justify-center"
+              style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: !mes || podeVoltar ? 1 : 0.35 }}
+            >
+              <ChevronLeft size={15} strokeWidth={2.75} />
+            </button>
+            <span className="text-center" style={{ minWidth: mes ? 62 : 74, fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>
+              {mes ? monthLabel(mes) : "Histórico"}
+            </span>
+            <button
+              onClick={() => (mes ? podeAvancar && irPara(vizinho(1)) : irPara(mesMaisNovo || mesAtual))}
+              disabled={!!mes && !podeAvancar}
+              aria-label="Próximo mês"
+              className="flex items-center justify-center"
+              style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: !mes || podeAvancar ? 1 : 0.35 }}
+            >
+              <ChevronRight size={15} strokeWidth={2.75} />
+            </button>
+          </div>
+          <button
+            onClick={() => irPara(mes ? null : mesesComItens.includes(mesAtual) ? mesAtual : mesMaisNovo || mesAtual)}
+            style={{
+              fontSize: 11.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              padding: "5px 12px",
+              background: mes ? "transparent" : "var(--rd-brand)",
+              border: mes ? "1px solid var(--rd-border)" : "1px solid var(--rd-brand)",
+              color: mes ? "var(--rd-text-dim)" : "var(--rd-brand-light)" }}
+          >
+            {mes ? "Ver tudo" : "Por mês"}
+          </button>
+        </div>
+      }
+    >
+      <div className="mbr-filtros" style={{ minWidth: 0, alignSelf: "flex-start", marginBottom: "var(--rd-s3)" }}>
+        {filtros.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => { setTipo(f.id); setExpandido(false); }}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: tipo === f.id ? 700 : 600,
+              background: tipo === f.id ? "var(--rd-brand)" : "transparent",
+              color: tipo === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {filtrados.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>
+          {mes ? `Nada lançado em ${monthLabel(mes)}.` : "Nada lançado aqui ainda."}
+        </div>
+      ) : (
+        visiveis.map((item) => (
+          <LinhaExtrato
+            key={item.id}
+            item={item}
+            onEditar={permissoes.podeEditar ? item.editar : null}
+            onExcluir={permissoes.podeEditar ? item.excluir : null}
+          />
+        ))
+      )}
+
+      {escondidas > 0 && (
+        <button onClick={() => setExpandido(true)} className="mbr-ver-mais">
+          <ChevronDown size={14} strokeWidth={2.75} /> Ver mais {escondidas} lançamento{escondidas === 1 ? "" : "s"}
+        </button>
+      )}
+      {expandido && filtrados.length > LIMITE && (
+        <button onClick={() => setExpandido(false)} className="mbr-ver-mais mbr-ver-mais--menos">
+          <ChevronUp size={14} strokeWidth={2.75} /> Ver menos
+        </button>
+      )}
+
+      <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
+        <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+          {filtrados.length} lançamento{filtrados.length === 1 ? "" : "s"}
+          {mes ? ` em ${monthLabel(mes)}` : " no total"}
+        </span>
+        <span className="flex items-center" style={{ gap: 8 }}>
+          <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>{rotuloSaldo}</span>
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: soma >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+            {soma >= 0 ? "+" : "−"} {formatCurrency(Math.abs(soma))}
+          </span>
+        </span>
+      </div>
+    </CartaoDetalhe>
+  );
+}
+
+function MotoDetalhe({
+  moto,
+  cliente,
+  clientes,
+  lancamentos,
+  config,
+  onVoltar,
+  onEditarMoto,
+  onExcluirMoto,
+  onNovoLancamento,
+  onEditarLancamento,
+  onExcluirLancamento,
+  onNovaManutencao,
+  onNovoCusto,
+  onExcluirManutencao,
+  onExcluirCusto,
+  onEditarContrato,
+  onNovoContrato,
+  onEncerrarContrato,
+  onRegistrarPagamento,
+  onPreview,
+  diasParados,
+}) {
+  const [menuAberto, setMenuAberto] = useState(false);
+  const [verMapa, setVerMapa] = useState(false);
+
+  const pagamentos = pagamentosDaMoto(moto, lancamentos);
+  const manutencoes = manutencoesDaMoto(moto, lancamentos);
+  const custos = custosDaMoto(moto, lancamentos);
+  const soma = (lista, campo) => lista.reduce((s, i) => s + Number(i[campo] || 0), 0);
+  const recebido = soma(pagamentos, "valor");
+  const gastoManutencao = soma(manutencoes, "valorGasto");
+  const gastoCustos = soma(custos, "valorGasto") + Number(moto.valorCompra || 0);
+  const saldo = recebido - gastoCustos - gastoManutencao;
+
+  const mesAtualKey = todayISO().slice(0, 7);
+  const cobraEsteMes = moto.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+  const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentos, mesAtualKey);
+  const vencido = moto.status === "alugada" && isContratoVencido(moto.contratoAtual, pagamentos);
+  const diaVenc = diaVencimentoDoContrato(moto.contratoAtual);
+  const venc = proximoVencimento(moto.contratoAtual);
+  const mensalidade = Number(moto.contratoAtual?.valorMensal || 0);
+
+  // "se pagar em dia, empata em": quanto falta pra moto devolver o que custou,
+  // dividido pela mensalidade — só faz sentido com contrato ativo
+  const empateEm = (() => {
+    if (saldo >= 0 || mensalidade <= 0) return null;
+    const meses = Math.ceil(-saldo / mensalidade);
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + meses);
+    return monthLabel(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  })();
+
+  // contrato (PDF/anexo) não entra mais aqui — fica só na ficha do cliente, junto do
+  // resto da vida dele; a ficha da moto guarda só os documentos da moto em si
+  const documentos = [
+    ...notaFiscalAnexosOf(moto).map((a, i, l) => ({ url: a.link, titulo: l.length > 1 ? `Nota fiscal ${i + 1}` : "Nota fiscal" })),
+    ...notaFiscalFabricaAnexosOf(moto).map((a, i, l) => ({ url: a.link, titulo: l.length > 1 ? `NF de fábrica ${i + 1}` : "NF de fábrica" })),
+    ...(moto.documentoLink ? [{ url: moto.documentoLink, titulo: "Documento" }] : []),
+    ...(moto.certificadoLink ? [{ url: moto.certificadoLink, titulo: "Certificado" }] : []),
+  ].filter((d) => d.url);
+
+  // EXTRATO — pagamentos, manutenções, custos, contratos e a compra numa linha do tempo só
+  const extrato = [
+    ...pagamentos.map((p) => ({
+      id: p.id, data: p.data, tipo: "pagamento", sinal: 1, valor: Number(p.valor || 0),
+      nome: p.categoria || p.descricao || "Pagamento",
+      editar: () => onEditarLancamento(p.id), excluir: () => onExcluirLancamento(p.id),
+    })),
+    ...manutencoes.map((m) => ({
+      id: m.id, data: m.data, tipo: "manutencao", sinal: -1, valor: Number(m.valorGasto || 0), nome: m.descricao,
+      editar: m.doCaixa ? () => onEditarLancamento(m.id) : null, excluir: () => onExcluirManutencao(m.id),
+    })),
+    ...custos.map((c) => ({
+      id: c.id, data: c.data, tipo: "custo", sinal: -1, valor: Number(c.valorGasto || 0), nome: c.descricao,
+      editar: c.doCaixa ? () => onEditarLancamento(c.id) : null, excluir: () => onExcluirCusto(c.id),
+    })),
+    ...(moto.contratoAtual?.dataInicio
+      ? [{
+          id: "contrato-atual", data: moto.contratoAtual.dataInicio, tipo: "contrato",
+          nome: `Início do contrato nº ${moto.contratoAtual.numeroContrato || 1}`,
+          texto: `${formatCurrency(mensalidade)}/mês`, editar: onEditarContrato,
+        }]
+      : []),
+    ...(moto.historicoContratos || []).flatMap((h, i) => {
+      const nomeCliente = (clientes || []).find((c) => c.id === h.clienteId)?.nome || "cliente anterior";
+      const linhas = [];
+      if (h.dataInicio) linhas.push({ id: `h-ini-${i}`, data: h.dataInicio, tipo: "contrato", nome: `Início do contrato nº ${h.numeroContrato || i + 1} · ${nomeCliente}`, texto: `${formatCurrency(h.valorMensal)}/mês` });
+      if (h.encerradoEm) linhas.push({ id: `h-fim-${i}`, data: h.encerradoEm, tipo: "contrato", nome: `Fim do contrato nº ${h.numeroContrato || i + 1} · ${nomeCliente}`, texto: "encerrado" });
+      return linhas;
+    }),
+    ...(moto.dataCompra
+      ? [{ id: "compra", data: moto.dataCompra, tipo: "custo", sinal: -1, valor: Number(moto.valorCompra || 0), nome: "Compra da moto", editar: onEditarMoto }]
+      : []),
+  ].sort((a, b) => (a.data < b.data ? 1 : -1));
+
+  const filtros = [
+    { id: "tudo", label: "Tudo" },
+    { id: "pagamento", label: "Pagamentos" },
+    { id: "manutencao", label: "Manutenções" },
+    { id: "custo", label: "Custos" },
+  ];
+
+  const anteriores = [...(moto.historicoContratos || [])].sort((a, b) => (a.encerradoEm > b.encerradoEm ? -1 : 1));
+  const linkRastreio = moto.linkRastreamento || config?.linkRastreioGeral;
+
+  return (
+    <div className="flex flex-col mbr-fade-in" style={{ gap: "var(--rd-s5)" }}>
+      {/* BARRA DE CIMA — volta pra lista, identifica a moto e concentra as ações */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+        <button onClick={onVoltar} className="flex items-center mbr-hover-grow" style={{ gap: 5, fontSize: 13, fontWeight: 600, color: "var(--rd-text-dim)" }}>
+          <ChevronLeft size={15} strokeWidth={2.75} /> Frota
+        </button>
+        <span style={{ width: 1, height: 20, background: "var(--rd-border)" }} />
+        <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 19, fontWeight: 700, letterSpacing: "-0.01em", color: "var(--rd-text)" }}>
+          {formatPlaca(moto.placa)}
+        </span>
+        <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-dim)", minWidth: 0 }}>
+          {[moto.modelo, moto.anoModelo, moto.cor].filter(Boolean).join(" · ")}
+        </span>
+        <span
+          className="flex items-center"
+          style={{
+            gap: 6, fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 10px", flex: "none",
+            color: moto.status === "alugada" ? "var(--rd-brand-light)" : "var(--rd-attention)",
+            background: moto.status === "alugada" ? "var(--rd-brand)" : "var(--rd-attention-bg)" }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: "currentColor" }} />
+          {moto.status === "alugada" ? "Alugada" : MOTO_STATUS[moto.status]?.label || "Parada"}
+        </span>
+
+        <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+          {linkRastreio && (
+            <button
+              onClick={() => setVerMapa((v) => !v)}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "8px 15px", fontSize: 12.5, fontWeight: 600 }}
+            >
+              <MapPin size={14} strokeWidth={2.5} /> {verMapa ? "Ocultar mapa" : "Localização"}
+            </button>
+          )}
+          {permissoes.podeEditar && (
+            <button
+              onClick={onNovoLancamento}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700 }}
+            >
+              <Plus size={14} strokeWidth={3} /> Lançar
+            </button>
+          )}
+          {permissoes.podeEditar && (
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setMenuAberto((v) => !v)}
+                aria-label="Mais ações"
+                className="flex items-center justify-center"
+                style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+              >
+                <MoreHorizontal size={16} strokeWidth={2.5} />
+              </button>
+              {menuAberto && (
+                <>
+                  <div className="fixed inset-0" style={{ zIndex: 30 }} onClick={() => setMenuAberto(false)} />
+                  <div
+                    className="flex flex-col"
+                    style={{ position: "absolute", top: 40, right: 0, zIndex: 31, minWidth: 172, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: 6, boxShadow: "0 12px 30px rgba(0,0,0,0.4)" }}
+                  >
+                    <button
+                      onClick={() => { setMenuAberto(false); onEditarMoto(); }}
+                      className="flex items-center text-left"
+                      style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-text)" }}
+                    >
+                      <Pencil size={13} /> Editar moto
+                    </button>
+                    {moto.status !== "alugada" && (
+                      <button
+                        onClick={() => { setMenuAberto(false); onExcluirMoto(); }}
+                        className="flex items-center text-left"
+                        style={{ gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, color: "var(--rd-negative)" }}
+                      >
+                        <Trash2 size={13} /> Excluir moto
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {verMapa && linkRastreio && (
+        <CartaoDetalhe padding="var(--rd-s3)">
+          <TrackingMap link={linkRastreio} filterPlaca={moto.placa} height={300} />
+        </CartaoDetalhe>
+      )}
+
+      <div className="mbr-detalhe-grid">
+        {/* ---------- COLUNA DA ESQUERDA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+          <CartaoDetalhe>
+            {moto.contratoAtual ? (
+              <>
+                <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                  <AvatarIniciais username={cliente?.nome} />
+                  <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                    <span className="truncate" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>
+                      {cliente?.nome || "Cliente"}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                      contrato nº {moto.contratoAtual.numeroContrato || 1}
+                      {moto.contratoAtual.dataInicio && ` · desde ${formatDate(moto.contratoAtual.dataInicio)}`}
+                      {moto.contratoAtual.dataTermino && ` · vence ${formatDate(moto.contratoAtual.dataTermino)}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center" style={{ gap: "var(--rd-s2)", marginLeft: "auto" }}>
+                    <span
+                      className="flex items-center"
+                      style={{
+                        gap: 6, fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "5px 12px", whiteSpace: "nowrap",
+                        color: pagoEsteMes ? "var(--rd-positive)" : vencido ? "var(--rd-negative)" : "var(--rd-attention)",
+                        background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)" }}
+                    >
+                      {pagoEsteMes ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                      {pagoEsteMes
+                        ? `${mesPorExtenso(mesAtualKey)} pago`
+                        : vencido
+                        ? `Atrasado${diaVenc ? ` (venceu dia ${diaVenc})` : ""}`
+                        : cobraEsteMes
+                        ? `${mesPorExtenso(mesAtualKey)} em aberto`
+                        : `1ª cobrança em ${monthLabel((primeiraCobrancaDoContrato(moto.contratoAtual) || "").slice(0, 7))}`}
+                    </span>
+                    {permissoes.podeEditar && (
+                      <button
+                        onClick={onEditarContrato}
+                        aria-label="Editar contrato"
+                        title="Editar contrato"
+                        className="flex items-center justify-center"
+                        style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!pagoEsteMes && vencido && permissoes.podeEditar && (
+                  <button
+                    onClick={onRegistrarPagamento}
+                    className="flex items-center text-xs font-semibold rounded-xl px-3 py-2"
+                    style={{ gap: 6, marginTop: "var(--rd-s3)", border: "1px solid var(--rd-attention-border)", color: "var(--rd-attention-text)" }}
+                  >
+                    <CheckCircle2 size={13} /> Lançar pagamento recebido
+                  </button>
+                )}
+
+                <div className="mbr-ficha-stats" style={{ marginTop: "var(--rd-s4)" }}>
+                  <BlocoNumero rotulo="Mensalidade" valor={formatCurrency(mensalidade)} cor="var(--rd-attention-text)" />
+                  <BlocoNumero
+                    rotulo="Vencimento"
+                    valor={venc ? venc.data : diaVenc ? `dia ${diaVenc}` : ""}
+                    detalhe={venc ? (venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`) : null}
+                    cor={vencido ? "var(--rd-negative)" : undefined}
+                  />
+                  <BlocoNumero
+                    rotulo="Alugada há"
+                    valor={`${mesesDesdeISO(moto.contratoAtual.dataInicio) ?? 0} ${mesesDesdeISO(moto.contratoAtual.dataInicio) === 1 ? "mês" : "meses"}`}
+                    detalhe={moto.contratoAtual.dataInicio ? `desde ${formatDate(moto.contratoAtual.dataInicio)}` : null}
+                  />
+                  <BlocoNumero rotulo="Documentos" valor={String(documentos.length)} detalhe={documentos.length === 1 ? "arquivo" : "arquivos"} />
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)" }}>
+                <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--rd-attention-text)" }}>Sem contrato</span>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                    {diasParados != null ? `parada há ${diasParados} dia${diasParados === 1 ? "" : "s"}` : "essa moto não está alugada"}
+                  </span>
+                </div>
+                {permissoes.podeEditar && (
+                  <button
+                    onClick={onNovoContrato}
+                    className="flex items-center"
+                    style={{ gap: 7, marginLeft: "auto", background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}
+                  >
+                    <Plus size={14} strokeWidth={3} /> Alugar / novo contrato
+                  </button>
+                )}
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          <CartaoExtrato titulo="Extrato da moto" itens={extrato} filtros={filtros} rotuloSaldo="Saldo" />
+        </div>
+
+        {/* ---------- COLUNA DA DIREITA ---------- */}
+        <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+          <CartaoDetalhe titulo="Resultado desta moto">
+            <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
+              <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: saldo >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                {saldo >= 0 ? "+" : "−"} {formatCurrency(Math.abs(saldo))}
+              </span>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>desde a compra</span>
+            </div>
+            <BarraResultado recebido={recebido} custos={gastoCustos} manutencao={gastoManutencao} />
+            <div className="flex flex-col" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+              <LinhaLegendaValor cor="var(--rd-positive)" rotulo="Recebido" valor={formatCurrency(recebido)} />
+              <LinhaLegendaValor cor="var(--rd-negative)" rotulo="Compra e custos" valor={formatCurrency(gastoCustos)} />
+              <LinhaLegendaValor cor="var(--rd-attention)" rotulo="Manutenção" valor={formatCurrency(gastoManutencao)} />
+            </div>
+            {empateEm && (
+              <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Se pagar em dia, empata em</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>{empateEm}</span>
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe titulo="Clientes anteriores">
+            {anteriores.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                {cliente ? `Nenhum. ${cliente.nome} é o primeiro cliente dessa moto.` : "Essa moto ainda não teve contrato."}
+              </div>
+            ) : (
+              anteriores.map((h, i) => {
+                const nomeCliente = (clientes || []).find((c) => c.id === h.clienteId)?.nome || "Cliente";
+                return (
+                  <div key={`${h.numeroContrato}-${i}`} className="flex items-center" style={{ gap: 10, padding: "9px 0", borderTop: i === 0 ? "none" : "1px solid var(--rd-row-border)" }}>
+                    <AvatarIniciais username={nomeCliente} />
+                    <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                      <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{nomeCliente}</span>
+                      <span style={{ fontSize: 11, color: "var(--rd-text-faint)" }}>
+                        contrato nº {h.numeroContrato || i + 1}
+                        {h.dataInicio && ` · ${formatDate(h.dataInicio)}`}
+                        {h.encerradoEm && ` até ${formatDate(h.encerradoEm)}`}
+                      </span>
+                    </div>
+                    <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "var(--rd-text-muted)", whiteSpace: "nowrap" }}>
+                      {formatCurrency(h.valorMensal)}/mês
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </CartaoDetalhe>
+
+          <CartaoDetalhe cresce titulo="Ficha e documentos">
+            <div className="grid grid-cols-2" style={{ gap: "var(--rd-s3)" }}>
+              <CampoFicha rotulo="Chassi" valor={moto.chassi || "não informado"} />
+              <CampoFicha rotulo="Renavam" valor={moto.renavam || "não informado"} />
+              <CampoFicha rotulo="Comprada em" valor={moto.dataCompra ? formatDate(moto.dataCompra) : "não informado"} />
+              <CampoFicha rotulo="Valor de compra" valor={formatCurrency(moto.valorCompra || 0)} />
+            </div>
+            {documentos.length > 0 && (
+              <div className="flex items-center flex-wrap" style={{ gap: 7, marginTop: "var(--rd-s4)" }}>
+                {documentos.map((d, i) => (
+                  <button
+                    key={`${d.titulo}-${i}`}
+                    onClick={() => onPreview({ url: d.url, title: `${d.titulo} · ${formatPlaca(moto.placa)}` })}
+                    className="flex items-center"
+                    style={{ gap: 6, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 13px", fontSize: 12, fontWeight: 600, color: "var(--rd-text-muted)" }}
+                  >
+                    <FileText size={12} /> {d.titulo}
+                  </button>
+                ))}
+              </div>
+            )}
+          </CartaoDetalhe>
+
+          {moto.contratoAtual && permissoes.podeEditar && (
+            <div className="flex items-center" style={{ gap: "var(--rd-s3)" }}>
+              <button
+                onClick={onEditarContrato}
+                className="flex items-center justify-center"
+                style={{ flex: 1, gap: 7, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", color: "var(--rd-text)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700 }}
+              >
+                <Pencil size={13} /> Editar contrato
+              </button>
+              <button
+                onClick={onEncerrarContrato}
+                className="flex items-center justify-center"
+                style={{ flex: 1, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", color: "var(--rd-negative)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700 }}
+              >
+                Encerrar contrato
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MotosView({ motos, persist, clientes, persistClientes, config, lancamentos, persistLancamentos, motoInicial, onAbriuMoto }) {
   const [busca, setBusca] = useState("");
   const [expandido, setExpandido] = useState(null);
-  const [verCadastro, setVerCadastro] = useState(null);
+  // veio do mapa ("Abrir a ficha"): já entra com a ficha dessa moto aberta
+  useEffect(() => {
+    if (!motoInicial) return;
+    setExpandido(motoInicial);
+    onAbriuMoto?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [motoInicial]);
   const [modal, setModal] = useState(null);
   const [preview, setPreview] = useState(null);
 
@@ -2727,13 +4289,63 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
       natureza: "Manutenção",
       categoria: manutencao.tipo || "Manutenção",
       valor: manutencao.valorGasto,
-      descricao: descricaoPartes.join(" — "),
+      descricao: descricaoPartes.join(" · "),
       forma: "",
       motoId: moto.id,
       parcelas: 1,
     };
     await persistLancamentos([...(lancamentos || []), lancamento]);
     setModal(null);
+  };
+
+  // "Lançar pagamento" na moto atrasada: cria a entrada no Caixa já vinculada à moto
+  // (motoId), que é justamente o que faz ela sair de "pagamento atrasado". Antes o único
+  // caminho era ir na aba Caixa e lembrar de escolher a moto na mão — sem isso o app não
+  // liga o dinheiro a ninguém e a moto fica vermelha com o pagamento já lançado.
+  const registrarPagamento = async (moto) => {
+    const valor = Number(moto.contratoAtual?.valorMensal) || 0;
+    if (!window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)} hoje?`)) return;
+    const lancamento = {
+      id: uid(),
+      data: todayISO(),
+      tipo: "entrada",
+      natureza: "Operacional",
+      categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+      valor,
+      descricao: "",
+      forma: "",
+      motoId: moto.id,
+      parcelas: 1,
+    };
+    await persistLancamentos([...(lancamentos || []), lancamento]);
+  };
+
+  // clicar num gasto da ficha abre o lançamento dele no Caixa pra editar — é ali que se
+  // muda a natureza, e é a natureza que decide se ele aparece em Manutenções ou em Custos
+  const abrirLancamentoDaMoto = (id) => {
+    const lanc = (lancamentos || []).find((l) => l.id === id);
+    if (lanc) setModal({ type: "lancamento", lancamento: lanc });
+  };
+
+  const salvarLancamentoDaMoto = async (lancamento) => {
+    const existe = (lancamentos || []).some((l) => l.id === lancamento.id);
+    await persistLancamentos(
+      existe
+        ? (lancamentos || []).map((l) => (l.id === lancamento.id ? { ...l, ...lancamento } : l))
+        : [...(lancamentos || []), lancamento]
+    );
+    setModal(null);
+  };
+
+  // "+ Lançar" na ficha da moto: abre o mesmo formulário do Caixa já com a moto escolhida
+  const novoLancamentoDaMoto = (moto) =>
+    setModal({ type: "lancamento", novo: true, lancamento: { ...emptyLancamento(), motoId: moto.id } });
+
+  const excluirLancamentoDaMoto = async (id) => {
+    const l = (lancamentos || []).find((x) => x.id === id);
+    if (!l) return;
+    if (!window.confirm(`Excluir "${l.categoria || l.descricao || "lançamento"}" de ${formatCurrency(l.valor)} do caixa?`)) return;
+    await persistLancamentos((lancamentos || []).filter((x) => x.id !== id));
   };
 
   const salvarCustoExtra = async (moto, custo) => {
@@ -2757,6 +4369,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
   // antigos, de antes dessa integração com o Caixa), tira de lá; senão é um lançamento
   // de verdade no Caixa, tira de lá
   const excluirManutencao = async (moto, id) => {
+    const daMoto = manutencoesDaMoto(moto, lancamentos).find((m) => m.id === id);
+    if (!window.confirm(`Excluir a manutenção "${daMoto?.descricao || "sem descrição"}" de ${formatCurrency(daMoto?.valorGasto || 0)}?`)) return;
     const naMoto = (moto.manutencoes || []).some((m) => m.id === id);
     if (naMoto) {
       await salvarMoto({ ...moto, manutencoes: moto.manutencoes.filter((m) => m.id !== id) });
@@ -2766,6 +4380,8 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
   };
 
   const excluirCustoExtra = async (moto, id) => {
+    const oCusto = custosDaMoto(moto, lancamentos).find((c) => c.id === id);
+    if (!window.confirm(`Excluir o custo "${oCusto?.descricao || "sem descrição"}" de ${formatCurrency(oCusto?.valorGasto || 0)}?`)) return;
     const naMoto = (moto.custosExtras || []).some((c) => c.id === id);
     if (naMoto) {
       await salvarMoto({ ...moto, custosExtras: moto.custosExtras.filter((c) => c.id !== id) });
@@ -2774,351 +4390,343 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
     }
   };
 
+  const [filtroStatus, setFiltroStatus] = useState("todas"); // "todas" | "alugada" | "disponivel" | "manutencao"
+  const contagemStatus = {
+    alugada: motos.filter((m) => m.status === "alugada").length,
+    disponivel: motos.filter((m) => m.status === "disponivel").length,
+    manutencao: motos.filter((m) => m.status === "manutencao").length,
+  };
+
   const filtradas = motos.filter((m) => {
     const q = busca.toLowerCase();
     const qLimpo = placaLimpa(busca).toLowerCase();
-    return (
+    const bateBusca =
       !q ||
       [m.placa, m.chassi, m.renavam, m.modelo].some((f) => f?.toLowerCase().includes(q)) ||
-      (qLimpo && m.placa?.toLowerCase().includes(qLimpo))
-    );
+      (qLimpo && m.placa?.toLowerCase().includes(qLimpo));
+    const bateStatus = filtroStatus === "todas" || m.status === filtroStatus;
+    return bateBusca && bateStatus;
   });
 
+  // alugadas primeiro (por vencimento mais próximo), paradas/manutenção por último
+  const linhas = [...filtradas].sort((a, b) => {
+    const alugadaA = a.status === "alugada" ? 0 : 1;
+    const alugadaB = b.status === "alugada" ? 0 : 1;
+    if (alugadaA !== alugadaB) return alugadaA - alugadaB;
+    const diaA = diaVencimentoDoContrato(a.contratoAtual) ?? 99;
+    const diaB = diaVencimentoDoContrato(b.contratoAtual) ?? 99;
+    return diaA - diaB;
+  });
+
+  const mesesDesde = (dataISO) => {
+    if (!dataISO) return null;
+    const d = new Date(`${dataISO}T00:00:00`);
+    const hoje = new Date();
+    return Math.max(0, (hoje.getFullYear() - d.getFullYear()) * 12 + (hoje.getMonth() - d.getMonth()));
+  };
+
+  // igual ao payback do painel: conta só o valor de compra. Somar manutenção e custo
+  // extra fazia a meta andar pra trás a cada troca de óleo lançada
+  const paybackDaMoto = (m) => {
+    const investimentoTotal = Number(m.valorCompra || 0);
+    const recebidoReal = pagamentosDaMoto(m, lancamentos).reduce((s, p) => s + Number(p.valor), 0);
+    return investimentoTotal > 0 ? Math.min(100, (recebidoReal / investimentoTotal) * 100) : 0;
+  };
+
+  const diasParadaDaMoto = (m) => {
+    const historico = [...(m.historicoContratos || [])].sort((a, b) => (a.encerradoEm > b.encerradoEm ? -1 : 1));
+    const desde = historico[0]?.encerradoEm || m.dataCompra;
+    if (!desde) return null;
+    const inicio = new Date(`${desde}T00:00:00`);
+    return Math.max(0, Math.floor((new Date() - inicio) / (1000 * 60 * 60 * 24)));
+  };
+
+  // quanto uma moto parada deixa de render por dia — média do que as alugadas rendem
+  const custoDiarioParada = (() => {
+    const ativos = motos.filter((m) => m.contratoAtual && Number(m.contratoAtual.valorMensal) > 0);
+    if (ativos.length === 0) return 0;
+    const media = ativos.reduce((s2, m) => s2 + Number(m.contratoAtual.valorMensal), 0) / ativos.length;
+    return Math.round(media / 30);
+  })();
+
+  const clientesSemContrato = clientes.filter((c) => !motos.some((mm) => mm.contratoAtual?.clienteId === c.id));
+
+  const filtros = [
+    { id: "todas", label: "Todas" },
+    { id: "alugada", label: "Alugadas" },
+    { id: "disponivel", label: `Paradas${contagemStatus.disponivel ? ` ${contagemStatus.disponivel}` : ""}` },
+    { id: "manutencao", label: "Manutenção" },
+  ];
+
+  // clicar numa moto troca a lista pela ficha dela em tela inteira (não expande mais
+  // por dentro da linha) — "< Frota" volta pra lista
+  const motoAberta = motos.find((m) => m.id === expandido) || null;
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <h2 style={{ fontFamily: HEAD_FONT, fontSize: 22, fontWeight: 700, color: theme.mint }}>Motos</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setModal({ type: "consulta" })}
-            className="flex items-center gap-1 rounded-xl px-3 py-2 text-sm font-semibold"
-            style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-          >
-            <Search size={15} /> Consultar placa
-          </button>
+    <div className="flex flex-col" style={{ gap: "var(--rd-gap-secao)" }}>
+      {motoAberta ? (
+        <MotoDetalhe
+          key={motoAberta.id}
+          moto={motoAberta}
+          cliente={clientes.find((c) => c.id === motoAberta.contratoAtual?.clienteId)}
+          clientes={clientes}
+          lancamentos={lancamentos}
+          config={config}
+          diasParados={motoAberta.status !== "alugada" ? diasParadaDaMoto(motoAberta) : null}
+          onVoltar={() => setExpandido(null)}
+          onEditarMoto={() => setModal({ type: "moto", mode: "editar", moto: motoAberta })}
+          onExcluirMoto={async () => {
+            await excluirMoto(motoAberta.id);
+            setExpandido(null);
+          }}
+          onNovoLancamento={() => novoLancamentoDaMoto(motoAberta)}
+          onEditarLancamento={abrirLancamentoDaMoto}
+          onExcluirLancamento={excluirLancamentoDaMoto}
+          onExcluirManutencao={(id) => excluirManutencao(motoAberta, id)}
+          onExcluirCusto={(id) => excluirCustoExtra(motoAberta, id)}
+          onEditarContrato={() => setModal({ type: "contrato", mode: "editar", moto: motoAberta })}
+          onNovoContrato={() => setModal({ type: "contrato", moto: motoAberta })}
+          onEncerrarContrato={() => encerrarContrato(motoAberta)}
+          onRegistrarPagamento={() => registrarPagamento(motoAberta)}
+          onPreview={setPreview}
+        />
+      ) : (
+      <>
+      {/* linha 1 — só título e ações. Os filtros saíram daqui: com título,
+          filtros e dois botões na mesma linha, o topo virava um amontoado */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
+        <div className="flex flex-col" style={{ gap: 3 }}>
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)", fontFamily: "var(--rd-font)" }}>Frota</h1>
+          <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>
+            {motos.length} moto{motos.length === 1 ? "" : "s"} · {contagemStatus.alugada} alugada{contagemStatus.alugada === 1 ? "" : "s"} ·{" "}
+            {contagemStatus.disponivel} parada{contagemStatus.disponivel === 1 ? "" : "s"}
+          </span>
+        </div>
+        {/* minWidth:0 + maxWidth aqui é o que deixa a faixa de filtros ENCOLHER no
+            celular; sem isso ela mantinha a largura do conteúdo e empurrava a página */}
+        <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s2)", marginLeft: "auto", minWidth: 0, maxWidth: "100%" }}>
+          <div className="mbr-filtros" style={{ flex: "1 1 auto", minWidth: 0 }}>
+            {filtros.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFiltroStatus(f.id)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  fontSize: 12.5,
+                  fontWeight: filtroStatus === f.id ? 700 : 600,
+                  background: filtroStatus === f.id ? "var(--rd-brand)" : "transparent",
+                  color: filtroStatus === f.id ? "#F0F5EE" : f.id === "disponivel" ? "var(--rd-attention)" : "var(--rd-text-dim)" }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
           {permissoes.podeEditar && (
             <button
               onClick={() => setModal({ type: "moto", mode: "novo", moto: emptyMoto() })}
-              className="flex items-center gap-1 rounded-xl px-3 py-2 text-sm font-semibold"
-              style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+              className="flex items-center"
+              style={{ gap: 8, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "10px 18px", fontSize: 13.5, fontWeight: 700 }}
             >
-              <Plus size={16} /> Nova moto
+              <Plus size={15} strokeWidth={3} /> Nova moto
             </button>
           )}
         </div>
       </div>
 
-      <div className="relative mb-4">
-        <Search size={15} style={{ position: "absolute", left: 10, top: 10, color: theme.textMuted }} />
-        <input
-          style={{ ...inputStyle, paddingLeft: 32, marginBottom: 0 }}
-          placeholder="Buscar por placa, chassi, renavam ou modelo"
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-        />
+      {/* linha 2 — busca e consulta de placa */}
+      <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s3)", marginTop: "calc(var(--rd-gap-secao) * -0.5)" }}>
+        <div className="relative" style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <Search size={15} strokeWidth={2.75} style={{ position: "absolute", left: 14, top: 12, color: "var(--rd-text-dim)" }} />
+          <input
+            style={{
+              width: "100%",
+              background: "var(--rd-surface-2)",
+              border: "1px solid var(--rd-border)",
+              borderRadius: 12,
+              padding: "10px 14px 10px 38px",
+              color: "var(--rd-text)",
+              fontSize: 13.5,
+              fontFamily: "var(--rd-font)" }}
+            placeholder="Buscar por placa, chassi, renavam ou modelo"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center" style={{ gap: "var(--rd-s2)" }}>
+          <button
+            onClick={() => setModal({ type: "consulta" })}
+            className="flex items-center"
+            style={{
+              gap: 8,
+              background: "var(--rd-surface-2)",
+              border: "1px solid var(--rd-border)",
+              color: "var(--rd-text-muted)",
+              borderRadius: 999,
+              padding: "9px 16px",
+              fontSize: 13,
+              fontWeight: 600 }}
+          >
+            <Search size={14} strokeWidth={2.75} /> Consultar placa
+          </button>
+        </div>
       </div>
 
-      {filtradas.length === 0 && (
-        <div className="rounded-2xl p-6 text-center" style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT }}>
+      {linhas.length === 0 ? (
+        <div className="rounded-2xl p-6 text-center" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", color: "var(--rd-text-dim)", fontFamily: "var(--rd-font)" }}>
           Nenhuma moto encontrada.
         </div>
-      )}
+      ) : (
+        <>
+          {/* cabeçalho da tabela — só desktop/tablet (>=1024px); no celular vira cartão por moto */}
+          <div className="mbr-desktop-grid mbr-tab-head mbr-grid-frota">
+            <span>Placa</span>
+            <span>Cliente</span>
+            <span>Mensalidade</span>
+            <span>Vencimento</span>
+            <span>Payback</span>
+            <span className="mbr-col-extra">Onde está</span>
+            <span></span>
+          </div>
 
-      <div className="flex flex-col gap-2">
-        {filtradas.map((moto) => {
+          {/* uma tabela só, com as linhas separadas por um fio — antes cada moto era um
+              cartão solto com 10px de vão, o que empurrava a lista pra três vezes a
+              altura e tirava a leitura de tabela (coluna embaixo de coluna) */}
+          <div className="rounded-2xl overflow-hidden" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)" }}>
+            {linhas.map((moto, iLinha) => {
           const pagamentos = pagamentosDaMoto(moto, lancamentos);
           const vencido = moto.status === "alugada" && isContratoVencido(moto.contratoAtual, pagamentos);
+          const mesAtualKey = todayISO().slice(0, 7);
+          const cobraEsteMes = moto.contratoAtual ? contratoCobraNoMes(moto.contratoAtual, mesAtualKey) : false;
+          const pagoEsteMes = cobraEsteMes && pagouNoMes(pagamentos, mesAtualKey);
           const cliente = clientes.find((c) => c.id === moto.contratoAtual?.clienteId);
-          const aberto = expandido === moto.id;
+          const diaVenc = diaVencimentoDoContrato(moto.contratoAtual);
+          const venc = proximoVencimento(moto.contratoAtual);
+          const payback = paybackDaMoto(moto);
+          const parada = moto.status !== "alugada";
+          const dias = parada ? diasParadaDaMoto(moto) : null;
           return (
-            <div key={moto.id} className="rounded-2xl overflow-hidden" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-              <button className="w-full flex items-center gap-3 justify-between px-4 py-3 text-left" onClick={() => setExpandido(aberto ? null : moto.id)}>
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="flex items-center justify-center flex-shrink-0"
-                    style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}
+            <div
+              key={moto.id}
+              style={{
+                background: parada && moto.status === "disponivel" ? "#15120C" : "transparent",
+                borderTop: iLinha === 0 ? "none" : "1px solid var(--rd-row-border)" }}
+            >
+              <button
+                className="w-full text-left mbr-desktop-grid mbr-tab-row mbr-grid-frota"
+                onClick={() => setExpandido(moto.id)}
+              >
+                <div className="flex flex-col" style={{ gap: 5 }}>
+                  <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{formatPlaca(moto.placa)}</span>
+                  <span
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      alignSelf: "flex-start",
+                      borderRadius: 999,
+                      padding: "2px 8px",
+                      whiteSpace: "nowrap",
+                      color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)",
+                      background: parada ? "#2A2115" : "var(--rd-brand)" }}
                   >
-                    <Bike size={16} color={vencido ? theme.coral : moto.status === "alugada" ? theme.mint : theme.textGhost} />
+                    {/* "Disponível 128 dias" não cabe numa linha e quebrava a etiqueta em
+                        duas — e "Parada" é a palavra que a tela inteira usa (filtro,
+                        contagem do topo, cartão da Visão geral) */}
+                    {parada
+                      ? `${moto.status === "disponivel" ? "Parada" : MOTO_STATUS[moto.status]?.label || "Parada"}${
+                          dias != null ? ` ${dias} dia${dias === 1 ? "" : "s"}` : ""
+                        }`
+                      : "Alugada"}
+                  </span>
+                </div>
+                <div className="flex flex-col min-w-0" style={{ gap: 3 }}>
+                  {cliente ? (
+                    <>
+                      <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-text)" }}>{cliente.nome}</span>
+                      {moto.contratoAtual?.dataInicio ? (
+                        <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+                          desde {formatDate(moto.contratoAtual.dataInicio)} · {mesesDesde(moto.contratoAtual.dataInicio)} mes
+                          {mesesDesde(moto.contratoAtual.dataInicio) === 1 ? "" : "es"}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>data de início não informada</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--rd-attention-text)" }}>Sem contrato</span>
+                      {/* se tem gente na fila, essa é a informação que resolve; se não tem,
+                          o que dói é o quanto a moto deixa de render parada */}
+                      <span style={{ fontSize: 11.5, color: "var(--rd-attention-text)" }}>
+                        {clientesSemContrato.length > 0
+                          ? `${clientesSemContrato.length} cliente${clientesSemContrato.length === 1 ? "" : "s"} na fila de espera`
+                          : custoDiarioParada > 0
+                          ? `custa ${formatCurrencyCurto(custoDiarioParada)}/dia parada`
+                          : "nenhum cliente na fila"}
+                      </span>
+                    </>
+                  )}
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>
+                  {moto.contratoAtual ? formatCurrencyCurto(moto.contratoAtual.valorMensal) : ""}
+                </span>
+                {moto.contratoAtual ? (
+                  <div className="flex flex-col" style={{ gap: 2 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: vencido ? "var(--rd-negative)" : "var(--rd-text)" }}>
+                      {venc ? venc.data : diaVenc ? `dia ${diaVenc}` : ""}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: vencido ? "var(--rd-negative)" : "var(--rd-text-dim)" }}>
+                      {vencido ? "atrasado" : !venc ? "sem data" : venc.dias === 0 ? "hoje" : `em ${venc.dias} dia${venc.dias === 1 ? "" : "s"}`}
+                    </span>
                   </div>
-                  <div className="flex flex-col gap-3 min-w-0">
-                    <MotoPlate placa={moto.placa} />
-                    <StatusBadge status={moto.status} />
+                ) : (
+                  <span style={{ fontSize: 13, color: "var(--rd-text-dim)" }} />
+                )}
+                <div className="flex items-center" style={{ gap: 10, minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <BarraComCometa pct={payback} color={payback >= 50 ? "var(--rd-positive)" : payback >= 15 ? "var(--rd-attention)" : "var(--rd-negative)"} />
+                  </div>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)", flex: "none" }}>{payback.toFixed(0)}%</span>
+                </div>
+                <div className="flex items-center mbr-col-extra" style={{ gap: 7, minWidth: 0 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: parada ? "var(--rd-attention)" : "var(--rd-positive)", flex: "none" }} />
+                  <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                    {parada ? "Pátio" : [cliente?.cidade, cliente?.estado].filter(Boolean).join("/") || ""}
+                  </span>
+                </div>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)", justifySelf: "end" }}>
+                  {parada ? "Alugar" : "Abrir"}
+                </span>
+              </button>
+
+              {/* cartão — só celular/tablet (<1024px) */}
+              <button className="w-full mbr-mobile-only flex items-center justify-between text-left" onClick={() => setExpandido(moto.id)} style={{ gap: 12, padding: "14px 16px" }}>
+                <div className="flex items-center min-w-0" style={{ gap: 12 }}>
+                  <div className="flex items-center justify-center flex-shrink-0" style={{ width: 32, height: 32, borderRadius: 9, background: "var(--rd-surface-2)" }}>
+                    <Bike size={16} color={vencido ? "var(--rd-negative)" : parada ? "var(--rd-attention)" : "var(--rd-brand-light)"} />
+                  </div>
+                  <div className="flex flex-col min-w-0" style={{ gap: 3 }}>
+                    <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{formatPlaca(moto.placa)}</span>
+                    <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{cliente?.nome || "Sem contrato"}</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {vencido && <AlertTriangle size={14} color={theme.coral} />}
-                  {aberto ? <ChevronUp size={18} color={theme.textMuted} /> : <ChevronDown size={18} color={theme.textMuted} />}
+                <div className="flex items-center flex-shrink-0" style={{ gap: 8 }}>
+                  {vencido && <AlertTriangle size={14} color="var(--rd-negative)" />}
+                  <span style={{ fontSize: 12, fontWeight: 700, color: parada ? "var(--rd-attention)" : "var(--rd-brand-light)" }}>
+                    {parada ? "Alugar" : "Abrir"}
+                  </span>
                 </div>
               </button>
 
-              <Collapse open={aberto}>
-                <div className="px-4 pb-4 text-sm" style={{ fontFamily: BODY_FONT }}>
-                  <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-5">
-                    {moto.modelo || "Modelo não informado"}
-                  </div>
-
-                  <div className="mb-5">
-                    <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: theme.textFaint }}>
-                      Contrato
-                    </div>
-                    {moto.contratoAtual ? (
-                      <div className="rounded-xl p-3" style={{ background: theme.card2 }}>
-                        {vencido && (
-                          <div className="flex items-center gap-1.5 mb-2" style={{ color: theme.coral, fontSize: 12, fontWeight: 600 }}>
-                            <AlertTriangle size={13} /> Pagamento atrasado
-                          </div>
-                        )}
-                        <div className="flex items-center justify-between mb-1">
-                          <span style={{ color: theme.text, fontWeight: 600 }}>{cliente?.nome || "Cliente"}</span>
-                          <span style={{ color: theme.amber, fontFamily: HEAD_FONT, fontSize: 17 }}>
-                            {formatCurrency(moto.contratoAtual.valorMensal)}/mês
-                          </span>
-                        </div>
-                        <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                          {moto.contratoAtual.numeroClienteMoto}º cliente · contrato nº {moto.contratoAtual.numeroContrato}
-                          {diaVencimentoDoContrato(moto.contratoAtual) && ` · pagamento todo dia ${diaVencimentoDoContrato(moto.contratoAtual)}`}
-                          {moto.contratoAtual.dataTermino && ` · até ${formatDate(moto.contratoAtual.dataTermino)}`}
-                        </div>
-                        {contratoAnexosOf(moto.contratoAtual).length > 0 && (
-                          <div className="flex items-center gap-3 mt-1 flex-wrap">
-                            <ContratoAnexosButton
-                              anexos={contratoAnexosOf(moto.contratoAtual)}
-                              tituloPreview={`Contrato — ${formatPlaca(moto.placa)}`}
-                              onAbrir={(url, title) => setPreview({ url, title })}
-                            />
-                          </div>
-                        )}
-                        {permissoes.podeEditar && (
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => setModal({ type: "contrato", mode: "editar", moto })}
-                              className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                              style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                            >
-                              <Pencil size={12} /> Editar contrato
-                            </button>
-                            <button
-                              onClick={() => encerrarContrato(moto)}
-                              className="text-xs font-semibold rounded-xl px-3 py-1.5"
-                              style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                            >
-                              Encerrar contrato
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      permissoes.podeEditar && (
-                        <button
-                          onClick={() => setModal({ type: "contrato", moto })}
-                          className="text-xs font-semibold rounded-xl px-3"
-                          style={{ background: theme.mint, color: theme.text, minHeight: 44 }}
-                        >
-                          Alugar / novo contrato
-                        </button>
-                      )
-                    )}
-                  </div>
-
-                  <div className="mb-5">
-                    <MotoTrackingBlock link={moto.linkRastreamento || config?.linkRastreioGeral} placa={moto.placa} />
-                  </div>
-
-                  <div className="mb-5">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
-                        Manutenções
-                      </span>
-                      {permissoes.podeEditar && (
-                        <button
-                          onClick={() => setModal({ type: "manutencao", moto })}
-                          className="flex items-center justify-center mbr-hover-grow"
-                          style={{ color: theme.mint, width: 44, height: 44, marginRight: -10 }}
-                        >
-                          <Plus size={16} />
-                        </button>
-                      )}
-                    </div>
-                    {manutencoesDaMoto(moto, lancamentos).length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhuma registrada.</div>
-                    ) : (
-                      [...manutencoesDaMoto(moto, lancamentos)].reverse().map((mnt) => (
-                        <div key={mnt.id} className="flex items-center justify-between gap-2 text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                          <span style={{ color: theme.text }}>
-                            {formatDate(mnt.data)} · {mnt.descricao}
-                          </span>
-                          <span className="flex items-center gap-2 flex-shrink-0">
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(mnt.valorGasto)}</span>
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={() => excluirManutencao(moto, mnt.id)}
-                                className="flex items-center justify-center mbr-hover-grow"
-                                style={{ color: theme.coral, width: 44, height: 44, margin: "-12px -10px -12px 0" }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="mb-5">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
-                        Custos
-                      </span>
-                      {permissoes.podeEditar && (
-                        <button
-                          onClick={() => setModal({ type: "custoExtra", moto })}
-                          className="flex items-center justify-center mbr-hover-grow"
-                          style={{ color: theme.mint, width: 44, height: 44, marginRight: -10 }}
-                        >
-                          <Plus size={16} />
-                        </button>
-                      )}
-                    </div>
-                    {custosDaMoto(moto, lancamentos).length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhum registrado.</div>
-                    ) : (
-                      [...custosDaMoto(moto, lancamentos)].reverse().map((c) => (
-                        <div key={c.id} className="flex items-center justify-between gap-2 text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                          <span style={{ color: theme.text }}>
-                            {formatDate(c.data)} · {c.descricao}
-                          </span>
-                          <span className="flex items-center gap-2 flex-shrink-0">
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(c.valorGasto)}</span>
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={() => excluirCustoExtra(moto, c.id)}
-                                className="flex items-center justify-center mbr-hover-grow"
-                                style={{ color: theme.coral, width: 44, height: 44, margin: "-12px -10px -12px 0" }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="mb-5">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: theme.textFaint }}>
-                        Pagamentos recebidos (fluxo de caixa)
-                      </span>
-                    </div>
-                    {pagamentos.length === 0 ? (
-                      <div style={{ color: theme.textMuted, fontSize: 12 }}>
-                        Nenhum pagamento com "{formatPlaca(moto.placa)}" na categoria/descrição ainda.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex justify-between text-xs mb-1" style={{ color: theme.mint, fontWeight: 700 }}>
-                          <span>Total recebido</span>
-                          <span>{formatCurrency(pagamentos.reduce((s, p) => s + Number(p.valor), 0))}</span>
-                        </div>
-                        {pagamentos.map((p) => (
-                          <div key={p.id} className="flex items-center justify-between text-xs py-1" style={{ borderTop: `1px solid ${theme.divider}` }}>
-                            <span style={{ color: theme.text }}>
-                              {formatDate(p.data)} · {p.categoria || "Sem categoria"}
-                            </span>
-                            <span style={{ color: theme.textMuted }}>{formatCurrency(p.valor)}</span>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-
-                  <div className="mb-5">
-                    <button
-                      onClick={() => setVerCadastro((v) => (v === moto.id ? null : moto.id))}
-                      className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide"
-                      style={{ color: theme.textFaint, minHeight: 32 }}
-                    >
-                      {verCadastro === moto.id ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                      Dados cadastrais e documentos
-                    </button>
-                    <Collapse open={verCadastro === moto.id}>
-                      <div className="pt-3">
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-3" style={{ color: theme.textMuted }}>
-                          <span>Chassi: {moto.chassi || "—"}</span>
-                          <span>Renavam: {moto.renavam || "—"}</span>
-                          <span>Compra: {formatDate(moto.dataCompra)}</span>
-                          <span>Valor: {formatCurrency(moto.valorCompra)}</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          {notaFiscalAnexosOf(moto).map((a, i, lista) => (
-                            <button
-                              key={`nf-${i}`}
-                              onClick={() => setPreview({ url: a.link, title: `Nota fiscal — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> {lista.length > 1 ? `Nota fiscal ${i + 1}` : "Nota fiscal"}
-                            </button>
-                          ))}
-                          {notaFiscalFabricaAnexosOf(moto).map((a, i, lista) => (
-                            <button
-                              key={`nff-${i}`}
-                              onClick={() => setPreview({ url: a.link, title: `Nota fiscal de fábrica — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> {lista.length > 1 ? `NF de fábrica ${i + 1}` : "NF de fábrica"}
-                            </button>
-                          ))}
-                          {moto.documentoLink && (
-                            <button
-                              onClick={() => setPreview({ url: moto.documentoLink, title: `Documento — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> Documento
-                            </button>
-                          )}
-                          {moto.certificadoLink && (
-                            <button
-                              onClick={() => setPreview({ url: moto.certificadoLink, title: `Certificado de garantia — ${formatPlaca(moto.placa)}` })}
-                              className="flex items-center justify-center gap-1.5 text-xs font-semibold rounded-xl px-2 text-center mbr-hover-grow"
-                              style={{ background: theme.card2, color: theme.mint, minHeight: 44 }}
-                            >
-                              <FileText size={13} className="flex-shrink-0" /> Certificado
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </Collapse>
-                  </div>
-
-                  {permissoes.podeEditar && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setModal({ type: "moto", mode: "editar", moto })}
-                        className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                        style={{ border: `1px solid ${theme.outline}`, color: theme.outlineText }}
-                      >
-                        <Pencil size={12} /> Editar
-                      </button>
-                      {moto.status !== "alugada" && (
-                        <button
-                          onClick={() => excluirMoto(moto.id)}
-                          className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-                          style={{ border: `1px solid ${theme.cardBorder}`, color: theme.coral }}
-                        >
-                          <Trash2 size={12} /> Excluir
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </Collapse>
             </div>
           );
-        })}
-      </div>
+            })}
+          </div>
+        </>
+      )}
+
+      </>
+      )}
 
       {modal?.type === "moto" && (
         <MotoFormModal
@@ -3143,6 +4751,25 @@ function MotosView({ motos, persist, clientes, persistClientes, config, lancamen
       {modal?.type === "custoExtra" && (
         <CustoExtraModal onClose={() => setModal(null)} onSave={(c) => salvarCustoExtra(modal.moto, c)} />
       )}
+      {/* editar o gasto direto da ficha da moto — mesma tela do Caixa, então a natureza
+          (que decide entre Manutenções e Custos) se muda aqui */}
+      {modal?.type === "lancamento" && (
+        <LancamentoModal
+          lancamento={modal.lancamento}
+          editando={!modal.novo}
+          motos={motos}
+          onClose={() => setModal(null)}
+          onSave={salvarLancamentoDaMoto}
+          onDelete={
+            modal.novo
+              ? undefined
+              : async () => {
+                  await persistLancamentos((lancamentos || []).filter((l) => l.id !== modal.lancamento.id));
+                  setModal(null);
+                }
+          }
+        />
+      )}
       {modal?.type === "consulta" && <ConsultaPlacaModal onClose={() => setModal(null)} />}
       {preview && <PdfViewer url={preview.url} title={preview.title} onClose={() => setPreview(null)} />}
     </div>
@@ -3163,6 +4790,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const selecionarMoto = (id) => setForm((f) => ({ ...f, motoId: id }));
+  const ehManutencao = form.natureza === "Manutenção";
 
   // o formulário só mostra Valor/Data/Natureza/Categoria de cara — "Moto relacionada",
   // "Forma de pagamento", "Parcelas" e "Descrição" ficam atrás de "Mais opções", já
@@ -3183,8 +4811,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
             style={{
               background: form.tipo === t ? (t === "entrada" ? theme.mint : theme.coral) : "transparent",
               color: form.tipo === t ? theme.mintText : theme.textMuted,
-              border: `1px solid ${theme.cardBorder}`,
-            }}
+              border: `1px solid ${theme.cardBorder}` }}
           >
             {t === "entrada" ? "Entrada" : "Saída"}
           </button>
@@ -3194,34 +4821,46 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
       <FieldLabel>Natureza</FieldLabel>
       <SelectField value={form.natureza} onChange={set("natureza")} options={NATUREZAS.map((n) => ({ value: n, label: n }))} />
 
-      {/* Manutenção é o único caso em que a moto NÃO é opcional: é ela que faz o gasto
-          aparecer na ficha da moto, em "Manutenções". Escondida atrás de "Mais opções",
-          era fácil salvar uma troca de óleo sem moto (ou com a natureza padrão) e depois
-          não achar ela embaixo da moto. Aqui o campo sobe junto com a escolha. */}
-      {form.natureza === "Manutenção" && (motos || []).length > 0 && (
+      {/* Dois casos em que a moto NÃO é detalhe opcional e por isso não fica escondida
+          atrás de "Mais opções":
+          - Manutenção: é a moto que faz o gasto aparecer na ficha dela, em "Manutenções"
+            (era fácil salvar uma troca de óleo sem moto e depois não achar ela lá).
+          - Entrada: é a moto que liga o pagamento ao aluguel. Sem ela o app não tem como
+            saber de quem é o dinheiro, e a moto continuava marcada como "pagamento
+            atrasado" mesmo com o pagamento já lançado no caixa. */}
+      {(form.natureza === "Manutenção" || form.tipo === "entrada") && (motos || []).length > 0 && (
         <>
-          <FieldLabel>Moto dessa manutenção</FieldLabel>
+          <FieldLabel>{ehManutencao ? "Moto dessa manutenção" : "Moto desse pagamento"}</FieldLabel>
           <SelectField
             value={form.motoId || ""}
             onChange={(e) => selecionarMoto(e.target.value)}
             options={[
               { value: "", label: "Escolha a moto..." },
-              ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+              ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
             ]}
           />
-          <div
-            className="text-xs -mt-2 mb-3"
-            style={{ color: form.motoId ? theme.textMuted : theme.amber, fontFamily: BODY_FONT }}
-          >
-            {form.motoId
-              ? "Vai aparecer na ficha dessa moto, em Manutenções — além de entrar aqui no caixa."
-              : "Escolha a moto pra essa manutenção aparecer na ficha dela. Sem moto, ela fica só no caixa."}
-          </div>
         </>
       )}
 
-      <FieldLabel>Categoria</FieldLabel>
-      <input style={inputStyle} value={form.categoria} onChange={set("categoria")} placeholder="Mensalidade, manutenção, combustível..." />
+      <FieldLabel>Nome do lançamento</FieldLabel>
+      <input style={inputStyle} value={form.categoria} onChange={set("categoria")} placeholder="Mensalidade, troca de óleo, despachante..." />
+
+      {/* com moto escolhida, o lançamento também entra na ficha dela — e é a NATUREZA
+          que decide em qual lista: "Manutenção" cai em Manutenções, o resto em Custos */}
+      {form.motoId && form.tipo === "saida" && (
+        <div
+          className="flex items-center -mt-2 mb-3"
+          style={{ gap: 7, fontSize: 12, color: ehManutencao ? "var(--rd-attention-text)" : "var(--rd-text-muted)" }}
+        >
+          {ehManutencao ? <Wrench size={13} /> : <Tag size={13} />}
+          Vai aparecer em <b>{ehManutencao ? "Manutenções" : "Custos"}</b> da moto{" "}
+          {(() => {
+            const m = (motos || []).find((x) => x.id === form.motoId);
+            return m ? formatPlaca(m.placa) : "";
+          })()}
+          . Pra mudar, é só trocar a natureza.
+        </div>
+      )}
       <Row2>
         <div>
           <FieldLabel>Valor (R$)</FieldLabel>
@@ -3229,7 +4868,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
         </div>
         <div>
           <FieldLabel>Data</FieldLabel>
-          <input type="date" style={dateInputStyle} value={form.data} onChange={set("data")} />
+          <CampoData value={form.data} onChange={set("data")} />
         </div>
       </Row2>
 
@@ -3240,24 +4879,37 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
           className="text-xs font-semibold mb-3"
           style={{ color: theme.mint, fontFamily: BODY_FONT }}
         >
-          + Mais opções (moto, forma de pagamento, parcelas, detalhe extra)
+          + Mais opções
         </button>
       ) : (
         <>
-          {(motos || []).length > 0 && form.natureza !== "Manutenção" && (
+          {/* a moto já aparece lá em cima quando é manutenção ou entrada — aqui só pra
+              saída comum (combustível, despachante...), onde ela é mesmo opcional */}
+          {(motos || []).length > 0 && !ehManutencao && form.tipo !== "entrada" && (
             <>
               <FieldLabel>Moto relacionada (opcional)</FieldLabel>
               <SelectField
                 value={form.motoId || ""}
                 onChange={(e) => selecionarMoto(e.target.value)}
+                disabled={form.aplicarTodas}
                 options={[
-                  { value: "", label: "Nenhuma / não é de uma moto específica" },
-                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+                  { value: "", label: "Nenhuma" },
+                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
                 ]}
               />
-              <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Use pra mensalidade, manutenção, combustível, despachante — qualquer gasto ou receita de uma moto específica.
-              </div>
+              {!editando && (motos || []).length > 0 && (
+                <Checkbox
+                  checked={!!form.aplicarTodas}
+                  onChange={(e) => setForm({ ...form, aplicarTodas: e.target.checked, motoId: e.target.checked ? "" : form.motoId })}
+                >
+                  Aplicar a todas as motos ({motos.length})
+                </Checkbox>
+              )}
+              {form.aplicarTodas && Number(form.valor) > 0 && (
+                <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                  {formatCurrency(Number(form.valor))} × {motos.length} = {formatCurrency(Number(form.valor) * motos.length)}
+                </div>
+              )}
             </>
           )}
           <FieldLabel>Forma de pagamento (opcional)</FieldLabel>
@@ -3273,7 +4925,7 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
           {Number(form.parcelas) > 1 && (
             <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
               {Number(form.parcelas) > (lancamento?.parcelasTotal || 1)
-                ? `Esse lançamento entra como a 1ª parcela — as outras ${Number(form.parcelas) - (lancamento?.parcelasTotal || 1)} entram automaticamente em "Contas futuras", uma por mês.`
+                ? `Esse lançamento entra como a 1ª parcela. As outras ${Number(form.parcelas) - (lancamento?.parcelasTotal || 1)} entram automaticamente em "Contas futuras", uma por mês.`
                 : `Marcado como parcela 1 de ${Number(form.parcelas)}.`}
             </div>
           )}
@@ -3284,9 +4936,18 @@ function LancamentoModal({ lancamento, onClose, onSave, onDelete, motos, editand
 
       <div className="flex gap-2">
         <button
-          onClick={() => onSave({ ...form, valor: Number(form.valor) || 0 })}
+          onClick={() => {
+            const { aplicarTodas, ...base } = form;
+            const valorUnitario = Number(form.valor) || 0;
+            const aplicaATodas = aplicarTodas && (motos || []).length > 0;
+            onSave(
+              aplicaATodas
+                ? { ...base, motoId: "", valor: valorUnitario * motos.length, valorUnitario, qtdMotos: motos.length }
+                : { ...base, valor: valorUnitario, valorUnitario: undefined, qtdMotos: undefined }
+            );
+          }}
           className="flex-1 rounded-xl py-2 font-semibold mt-1"
-          style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+          style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
         >
           Salvar
         </button>
@@ -3351,11 +5012,15 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
   const trocarModo = (novo) => {
     setModo(novo);
+    // "Todo mês" começa sempre no dia 1, marcado sozinho — dali a pessoa liga/desliga
+    // outros dias no próprio calendário (ver CampoData)
+    if (novo === "mensal" && !editando) setDiasExtras([]);
     setForm((f) => ({
       ...f,
       recorrente: novo === "mensal",
       parcelas: novo === "parcelado" ? (Number(f.parcelas) > 1 ? f.parcelas : 2) : 1,
       pago: novo === "unica" ? f.pago : false,
+      vencimento: novo === "mensal" && !editando ? `${(f.vencimento || todayISO()).slice(0, 8)}01` : f.vencimento,
     }));
   };
 
@@ -3364,6 +5029,27 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   // uma parcela já existente não vira um novo carnê ao ser reaberta
   const jaEhParcela = Number(futuro?.parcelasTotal) > 1;
 
+  // "Todo mês" com mais de um dia de vencimento (empréstimo pago dia 1 e dia 15, por
+  // exemplo) — cada dia extra vira sua própria conta recorrente, todas compartilhando
+  // grupoDias pra aparecerem juntas numa linha só na lista, em vez de precisar cadastrar
+  // duas contas iguais separadas
+  const diaPrincipal = Number((form.vencimento || todayISO()).slice(8, 10)) || 1;
+  const [diasExtras, setDiasExtras] = useState([]);
+
+  // clique em qualquer dia liga/desliga ele — inclusive o dia principal: se ele for
+  // desmarcado, o menor dos dias extras assume o lugar dele (o campo "vencimento"
+  // sempre precisa de pelo menos um dia; por isso o último dia marcado não sai)
+  const toggleDiaVencimento = (dia) => {
+    if (dia === diaPrincipal) {
+      if (diasExtras.length === 0) return;
+      const [novoPrincipal, ...resto] = diasExtras;
+      setDiasExtras(resto);
+      setForm({ ...form, vencimento: `${(form.vencimento || todayISO()).slice(0, 8)}${String(novoPrincipal).padStart(2, "0")}` });
+      return;
+    }
+    setDiasExtras(diasExtras.includes(dia) ? diasExtras.filter((d) => d !== dia) : [...diasExtras, dia].sort((a, b) => a - b));
+  };
+
   // igual ao modal de lançamento: o formulário abre curto e o resto fica atrás de "Mais
   // opções" — já aberto se a conta que está sendo editada usa algum desses campos
   const [maisOpcoes, setMaisOpcoes] = useState(
@@ -3371,7 +5057,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 
   const salvar = () => {
-    const { aplicarTodas, parcelas, ...base } = form;
+    const { aplicarTodas, parcelas, ...base } = form; // "aplicarTodas" é de contas antigas, não é mais usado
     const valor = valorNum;
     const nome = (base.nome || "").trim();
     const comNome = { ...base, nome, valor };
@@ -3397,10 +5083,20 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
       });
     };
 
-    const alvos =
-      aplicarTodas && (motos || []).length > 0
-        ? motos.map((m) => ({ ...comNome, id: uid(), motoId: m.id }))
-        : [comNome];
+    const diasParaGerar = modo === "mensal" && diasExtras.length > 0 ? [diaPrincipal, ...diasExtras] : null;
+    const alvos = diasParaGerar
+      ? (() => {
+          const grupo = uid();
+          const [ano, mes] = (comNome.vencimento || todayISO()).split("-");
+          return diasParaGerar.map((dia, i) => ({
+            ...comNome,
+            id: i === 0 ? comNome.id : uid(),
+            vencimento: `${ano}-${mes}-${String(dia).padStart(2, "0")}`,
+            diaVencimento: dia,
+            grupoDias: grupo,
+          }));
+        })()
+      : [comNome];
 
     const deveParcelar = modo === "parcelado" && nParcelas > 1 && !jaEhParcela;
     onSave(deveParcelar ? alvos.flatMap(gerarParcelas) : alvos);
@@ -3417,8 +5113,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
             style={{
               background: form.tipo === t ? (t === "entrada" ? theme.mint : theme.coral) : "transparent",
               color: form.tipo === t ? theme.mintText : theme.textMuted,
-              border: `1px solid ${theme.cardBorder}`,
-            }}
+              border: `1px solid ${theme.cardBorder}` }}
           >
             {t === "entrada" ? "Recebimento futuro" : "Conta a pagar"}
           </button>
@@ -3431,18 +5126,20 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
         onChange={set("nome")}
         placeholder={isEntrada ? "De onde vem esse dinheiro" : "Quem você paga / o que é"}
       />
-      <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-        É esse texto que aparece na lista e vira o nome do lançamento quando você confirmar.
-      </div>
-
       <Row2>
         <div>
           <FieldLabel>{modo === "parcelado" ? "Valor da parcela (R$)" : "Valor (R$)"}</FieldLabel>
           <input type="number" step="0.01" style={inputStyle} value={form.valor} onChange={set("valor")} />
         </div>
         <div>
-          <FieldLabel>{modo === "unica" ? "Vencimento" : "1º vencimento"}</FieldLabel>
-          <input type="date" style={dateInputStyle} value={form.vencimento} onChange={set("vencimento")} />
+          <FieldLabel>Vencimento</FieldLabel>
+          <CampoData
+            value={form.vencimento}
+            onChange={set("vencimento")}
+            recorrente={modo === "mensal" && !editando}
+            diasExtras={diasExtras}
+            onToggleDia={toggleDiaVencimento}
+          />
         </div>
       </Row2>
 
@@ -3463,8 +5160,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
               background: modo === op.id ? theme.mint : "transparent",
               color: modo === op.id ? theme.mintText : theme.textMuted,
               border: `1px solid ${theme.cardBorder}`,
-              opacity: jaEhParcela && op.id !== modo ? 0.4 : 1,
-            }}
+              opacity: jaEhParcela && op.id !== modo ? 0.4 : 1 }}
           >
             {op.label}
           </button>
@@ -3484,21 +5180,20 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
           />
           <div className="text-xs -mt-2 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
             {jaEhParcela
-              ? `Essa é a parcela ${futuro.parcelaAtual || 1} de ${futuro.parcelasTotal} — pra mudar o parcelamento, apague as parcelas e cadastre de novo.`
+              ? `Essa é a parcela ${futuro.parcelaAtual || 1} de ${futuro.parcelasTotal}. Pra mudar o parcelamento, apague as parcelas e cadastre de novo.`
               : `${nParcelas}x de ${formatCurrency(valorNum)} = ${formatCurrency(valorNum * nParcelas)} no total. Entra uma conta por mês a partir do 1º vencimento.`}
           </div>
         </>
       )}
-      {modo === "mensal" && (
+      {modo === "mensal" && !editando && (
         <div className="text-xs -mt-1 mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Se repete pra sempre, todo mês no mesmo dia — você confirma mês a mês.
+          Se repete todo mês. Toque em mais de um dia no calendário pra vencer mais de uma vez no mês.
         </div>
       )}
       {modo === "unica" && (
-        <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-          <input type="checkbox" checked={form.pago} onChange={(e) => setForm({ ...form, pago: e.target.checked })} />
+        <Checkbox checked={form.pago} onChange={(e) => setForm({ ...form, pago: e.target.checked })}>
           {isEntrada ? "Já foi recebido" : "Já foi pago"}
-        </label>
+        </Checkbox>
       )}
 
       {!maisOpcoes ? (
@@ -3508,7 +5203,7 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
           className="text-xs font-semibold mb-3"
           style={{ color: theme.mint, fontFamily: BODY_FONT }}
         >
-          + Mais opções (natureza, moto, detalhe extra)
+          + Mais opções
         </button>
       ) : (
         <>
@@ -3523,19 +5218,26 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
                 value={form.motoId || ""}
                 onChange={(e) => setForm({ ...form, motoId: e.target.value })}
                 options={[
-                  { value: "", label: "Nenhuma / não é de uma moto específica" },
-                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
+                  { value: "", label: "Nenhuma" },
+                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} · ${m.modelo || "modelo?"}` })),
                 ]}
               />
-              {!editando && (
-                <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-                  <input
-                    type="checkbox"
-                    checked={form.aplicarTodas}
-                    onChange={(e) => setForm({ ...form, aplicarTodas: e.target.checked })}
-                  />
-                  Aplicar a todas as motos ({motos.length}) — lança uma conta dessas pra cada moto
-                </label>
+              <Checkbox
+                checked={!!form.porMoto}
+                onChange={(e) => setForm({ ...form, porMoto: e.target.checked, motoId: e.target.checked ? "" : form.motoId })}
+              >
+                Por moto
+                {form.porMoto && (motos || []).length > 0 && (
+                  <b style={{ color: theme.mint }}>
+                    {" "}
+                    = {formatCurrency(valorNum * motos.length)} ({motos.length} moto{motos.length === 1 ? "" : "s"})
+                  </b>
+                )}
+              </Checkbox>
+              {form.porMoto && (
+                <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
+                  Quando entrar ou sair moto da frota, essa conta se ajusta sozinha.
+                </div>
               )}
             </>
           )}
@@ -3543,11 +5245,12 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
           <input style={inputStyle} value={form.descricao} onChange={set("descricao")} placeholder="Alguma observação a mais, se precisar" />
         </>
       )}
+
       <div className="flex gap-2">
         <button
           onClick={salvar}
           className="flex-1 rounded-xl py-2 font-semibold mt-1"
-          style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+          style={{ background: theme.mint, color: theme.mintText, fontWeight: 600 }}
         >
           Salvar
         </button>
@@ -3565,14 +5268,90 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
   );
 }
 
-const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, clientes, onConfirmar, mesAtualKey }, ref) {
+// uma linha de conta (a receber ou a pagar) do mês — data em etiqueta, nome, detalhe,
+// valor e o botão que resolve ("Recebi" / "Paguei"). Já resolvida, a linha fica apagada
+// e o botão vira um selo sem ação.
+function LinhaConta2({ item, entrada, rotuloAcao, rotuloFeito, onAcao, onAbrir }) {
+  const cor = entrada ? "var(--rd-positive)" : "var(--rd-negative)";
+  const mesCurto = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][
+    Number((item.data || "").slice(5, 7)) - 1
+  ];
+  const selo = item.atrasado
+    ? { texto: "atrasado", cor: "var(--rd-negative)", fundo: "rgba(226,106,90,0.14)" }
+    : !item.feito && item.diasAte >= 0 && item.diasAte <= 7
+    ? { texto: item.diasAte === 0 ? "hoje" : `${item.diasAte} dia${item.diasAte === 1 ? "" : "s"}`, cor: "var(--rd-attention-text)", fundo: "var(--rd-attention-bg-2)" }
+    : null;
+  return (
+    <div
+      className="flex items-center flex-wrap"
+      style={{ gap: 12, padding: "11px 0", borderTop: "1px solid var(--rd-row-border)", opacity: item.feito ? 0.5 : 1 }}
+    >
+      <div
+        className="flex flex-col items-center justify-center flex-none"
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 11,
+          background: "var(--rd-surface-2)",
+          border: `1px solid ${item.atrasado ? "var(--rd-negative)" : "var(--rd-border)"}` }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1, color: item.atrasado ? "var(--rd-negative)" : "var(--rd-text)" }}>
+          {String(item.dia).padStart(2, "0")}
+        </span>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-faint)" }}>{mesCurto}</span>
+      </div>
+      <div
+        className="flex flex-col"
+        style={{ gap: 2, minWidth: 0, flex: "1 1 140px", cursor: onAbrir ? "pointer" : "default" }}
+        onClick={onAbrir || undefined}
+      >
+        <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
+          <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{item.titulo}</span>
+          {selo && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 8px", background: selo.fundo, color: selo.cor, whiteSpace: "nowrap" }}>
+              {selo.texto}
+            </span>
+          )}
+        </div>
+        <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+          {/* resolvida, a linha troca o detalhe pela data — "placa · mensalidade ·
+              recebido em 01/09" não cabia e cortava justo na informação nova */}
+          {item.feito && item.feitoEm
+            ? `${(item.sub || "").split(" · ")[0]} · ${entrada ? "recebido" : "pago"} em ${formatDate(item.feitoEm).slice(0, 5)}`
+            : item.sub}
+        </span>
+      </div>
+      <span className="flex items-center" style={{ gap: 10, marginLeft: "auto" }}>
+      <span style={{ fontSize: 13.5, fontWeight: 700, color: item.feito ? "var(--rd-text-dim)" : cor, whiteSpace: "nowrap" }}>
+        {formatCurrency(item.valor)}
+      </span>
+      {permissoes.podeEditar && (rotuloAcao || rotuloFeito) &&
+        (item.feito ? (
+          <span
+            className="flex-none text-center"
+            style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "6px 12px", border: "1px solid var(--rd-border)", color: "var(--rd-text-faint)" }}
+          >
+            {rotuloFeito}
+          </span>
+        ) : (
+          <button
+            onClick={onAcao}
+            className="flex-none mbr-hover-grow"
+            style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "6px 13px", border: "1px solid var(--rd-border)", background: "var(--rd-surface-2)", color: "var(--rd-text)" }}
+          >
+            {rotuloAcao}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+const FuturosView = forwardRef(function FuturosView(
+  { futuros, persist, motos, clientes, onConfirmar, mesVisivel, mesAtualKey, lancamentos, onExcluido, onReceberContrato },
+  ref
+) {
   const [modal, setModal] = useState(null);
-  const [verTodasCobrancas, setVerTodasCobrancas] = useState(false);
-  const [verTodosFixos, setVerTodosFixos] = useState(false);
-  const [verTodosAvulsos, setVerTodosAvulsos] = useState(false);
-  const [grupoAberto, setGrupoAberto] = useState(null);
-  // o botão "Nova conta futura" mora no cabeçalho compartilhado com "Lançado" (vira o
-  // "Novo" de lá, ver FluxoCaixaView) — aqui só expõe um jeito de abrir o modal de fora
   useImperativeHandle(ref, () => ({ abrirNovo: () => setModal(emptyFuturo()) }));
 
   const salvar = async (fOrLista) => {
@@ -3585,385 +5364,153 @@ const FuturosView = forwardRef(function FuturosView({ futuros, persist, motos, c
     await persist(next);
     setModal(null);
   };
-  // persist() atualiza a lista na hora (otimista) mas pode falhar ao salvar de verdade —
-  // sem conferir o retorno, a conta "voltava" sozinha (sumia da tela mas continuava no
-  // banco) sem avisar nada. Agora devolve se deu certo, pra quem chama decidir se fecha.
+  // mesma proteção da aba Lançado: pergunta antes e devolve a chance de desfazer
   const excluir = async (id) => {
+    const alvo = futuros.find((x) => x.id === id);
+    if (!alvo) return;
+    const rotulo = `${nomeDoFuturo(alvo)} · ${formatCurrency(alvo.valor)}`;
+    const quantas = alvo.grupoParcelas ? futuros.filter((x) => x.grupoParcelas === alvo.grupoParcelas).length : 0;
+    const quantosDias = alvo.grupoDias ? futuros.filter((x) => x.grupoDias === alvo.grupoDias).length : 0;
+    const aviso =
+      quantas > 1
+        ? ` (essa é 1 das ${quantas} parcelas; as outras continuam)`
+        : quantosDias > 1
+          ? ` (essa é 1 dos ${quantosDias} dias de vencimento; os outros continuam)`
+          : "";
+    if (!window.confirm(`Excluir a conta futura "${rotulo}"${aviso}?`)) return false;
+    // persist() atualiza a tela na hora (otimista) mas pode falhar ao salvar de verdade —
+    // sem conferir o retorno, a conta "voltava" sozinha (a tela mostrava excluída, mas no
+    // banco continuava lá) sem avisar nada
     const ok = await persist(futuros.filter((x) => x.id !== id));
-    if (!ok) window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
-    return ok;
+    if (!ok) {
+      window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
+      return false;
+    }
+    onExcluido?.(alvo, rotulo);
+    return true;
   };
 
-  const { fixoMensalSaida, fixoMensalEntrada, avulsosPendentesSaida, avulsosPendentesEntrada, previstoSaida12Meses, previstoEntrada12Meses, saldoPrevisto12Meses } =
-    totaisFuturos(futuros, motos);
-  const contratos = contratosComoFuturos(motos);
-  const projecao = projecaoFuturosPorMes([...futuros, ...contratos], 12);
+  const mes = mesVisivel || mesAtualKey;
+  const contas = contasDoMes(futuros, motos, clientes, lancamentos, mes);
+  const sobra = contas.aReceber - contas.aPagar;
+  const totalBarra = Math.max(1, contas.aReceber + contas.aPagar);
+  const fimDoMes = `${String(contas.ultimoDia).padStart(2, "0")}/${mes.slice(5, 7)}`;
 
-  const recorrentes = futuros.filter((f) => f.recorrente);
-  // avulso confirmado (pago) já virou um lançamento real em "Lançado" — some daqui, não
-  // faz sentido continuar mostrando como pendência
-  const avulsos = [...futuros.filter((f) => !f.recorrente && !f.pago)].sort((a, b) => (a.vencimento > b.vencimento ? 1 : -1));
-
-  // agenda de cobrança: agrupa por dia do mês quem tem que ser cobrado — pensado pra
-  // quando tiver muitas motos/clientes e ficar difícil lembrar "quem vence quando" só
-  // olhando a lista corrida de contratos/recorrentes
-  const cobrancasPorDia = (() => {
-    const entradasRecorrentes = [...contratos, ...futuros.filter((f) => f.recorrente && f.tipo === "entrada")];
-    const porDia = new Map();
-    entradasRecorrentes.forEach((f) => {
-      const dia = f.diaVencimento || (f.vencimento ? new Date(`${f.vencimento}T00:00:00`).getDate() : null);
-      if (!dia) return;
-      const moto = motos?.find((m) => m.id === f.motoId);
-      const cliente = moto?.contratoAtual ? clientes?.find((c) => c.id === moto.contratoAtual.clienteId) : null;
-      const item = {
-        id: f.id,
-        label: cliente?.nome || nomeDoFuturo(f),
-        sub: moto ? formatPlaca(moto.placa) : null,
-        valor: Number(f.valor) || 0,
-      };
-      if (!porDia.has(dia)) porDia.set(dia, []);
-      porDia.get(dia).push(item);
-    });
-    return [...porDia.entries()].sort((a, b) => a[0] - b[0]);
-  })();
-
-  // Junta numa linha só o que é "a mesma conta repetida", pra lista não virar um
-  // paredão: as parcelas de um mesmo carnê (um financiamento em 48x virava 48 linhas)
-  // e a mesma conta aplicada a várias motos (rastreador, seguro — vira uma conta por
-  // moto no banco). Clicar na linha abre e mostra o que tem dentro.
-  //
-  // Contas já cadastradas não têm o campo de grupo, então o agrupamento por moto usa o
-  // CONTEÚDO (nome + tipo + valor + dia) como chave — assim o que já está no banco
-  // aparece agrupado sem precisar recadastrar nada.
-  const agrupar = (lista) => {
-    const grupos = new Map();
-    lista.forEach((f) => {
-      const dia = f.diaVencimento || (f.vencimento ? f.vencimento.slice(8, 10) : "");
-      const chave = f.grupoParcelas
-        ? `parc:${f.grupoParcelas}`
-        : f.motoId
-        ? `moto:${nomeDoFuturo(f)}|${f.tipo}|${Number(f.valor) || 0}|${f.recorrente ? 1 : 0}|${dia}`
-        : `uni:${f.id}`;
-      if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
-      grupos.get(chave).itens.push(f);
-    });
-    return [...grupos.values()];
+  const resolver = (item) => {
+    if (item.origem === "contrato") onReceberContrato?.(item.moto, mes);
+    else onConfirmar?.(item.futuro, mes);
   };
 
-  const gruposFixos = agrupar(recorrentes);
-  const gruposAvulsos = agrupar(avulsos);
-
-  const GrupoRow = ({ grupo }) => {
-    const itens = grupo.itens;
-    const primeiro = itens[0];
-    const aberto = grupoAberto === grupo.chave;
-    const ehParcelado = grupo.chave.startsWith("parc:");
-    const total = itens.reduce((s, f) => s + (Number(f.valor) || 0), 0);
-    const pendentes = itens.filter((f) => !f.pago);
-    const proxima = [...pendentes].sort((a, b) => (a.vencimento > b.vencimento ? 1 : -1))[0];
-    const totalParcelas = primeiro.parcelasTotal || itens.length;
-
-    return (
-      <div className="rounded-2xl overflow-hidden" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-        <div
-          onClick={() => setGrupoAberto(aberto ? null : grupo.chave)}
-          className="flex items-center justify-between px-4 py-3 cursor-pointer"
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}>
-              {primeiro.tipo === "entrada" ? <TrendingUp size={16} color={theme.mint} /> : <TrendingDown size={16} color={theme.coral} />}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }}>{nomeDoFuturo(primeiro)}</span>
-                <span
-                  style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: theme.card2, color: theme.textMuted, flexShrink: 0 }}
-                >
-                  {ehParcelado ? `${totalParcelas} parcelas` : `${itens.length} motos`}
-                </span>
-              </div>
-              <div style={{ color: theme.textMuted, fontFamily: BODY_FONT, fontSize: 12 }}>
-                {ehParcelado
-                  ? `${formatCurrency(primeiro.valor)} por mês · faltam ${pendentes.length} de ${totalParcelas}${
-                      proxima ? ` · próxima em ${formatDate(proxima.vencimento)}` : ""
-                    }`
-                  : primeiro.recorrente
-                  ? `Todo mês · dia ${primeiro.diaVencimento || (primeiro.vencimento ? new Date(`${primeiro.vencimento}T00:00:00`).getDate() : "?")} · ${formatCurrency(primeiro.valor)} por moto`
-                  : `Vence em ${formatDate(primeiro.vencimento)} · ${formatCurrency(primeiro.valor)} por moto`}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <span style={{ color: primeiro.tipo === "entrada" ? theme.mint : theme.coral, fontFamily: HEAD_FONT, fontSize: 16 }}>
-              {primeiro.tipo === "entrada" ? "+" : "-"} {formatCurrency(ehParcelado ? total : total)}
-            </span>
-            {aberto ? <ChevronUp size={16} color={theme.textMuted} /> : <ChevronDown size={16} color={theme.textMuted} />}
-          </div>
-        </div>
-        <Collapse open={aberto}>
-          <div className="flex flex-col gap-2 px-3 pb-3">
-            {itens.map((f) => (
-              <FuturoRow key={f.id} f={f} dentroDeGrupo />
-            ))}
-          </div>
-        </Collapse>
-      </div>
-    );
-  };
-
-  const FuturoRow = ({ f, dentroDeGrupo }) => {
-    const motoLigada = motos?.find((m) => m.id === f.motoId);
-    const diaDoMes = f.diaVencimento || (f.vencimento ? new Date(`${f.vencimento}T00:00:00`).getDate() : null);
-    // fixa mensal não tem "pago" (ela se repete pra sempre) — o que existe é confirmar ou
-    // não o mês atual específico; avulso pago já nem chega aqui (filtrado antes da lista)
-    const jaConfirmadoEsteMes = f.recorrente && (f.confirmados || []).includes(mesAtualKey);
-    return (
+  const Coluna = ({ entrada, titulo, total, itens, vazio, rodape }) => (
     <div
-      key={f.id}
-      onClick={() => permissoes.podeEditar && setModal(f)}
-      className={`flex items-center justify-between px-4 py-3 rounded-2xl${permissoes.podeEditar ? " cursor-pointer" : ""}`}
-      style={{
-        background: dentroDeGrupo ? theme.card2 : theme.card,
-        border: `1px solid ${dentroDeGrupo ? "transparent" : theme.cardBorder}`,
-        opacity: jaConfirmadoEsteMes ? 0.55 : 1,
-      }}
+      className="mbr-cresce"
+      style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
     >
-      <div className="flex items-center gap-3 min-w-0">
-        <div
-          className="flex items-center justify-center flex-shrink-0"
-          style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}
-        >
-          {f.tipo === "entrada" ? <TrendingUp size={16} color={theme.mint} /> : <TrendingDown size={16} color={theme.coral} />}
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s3)" }}>
+        <span className="flex items-center" style={{ gap: 8 }}>
+          <span style={{ width: 7, height: 7, borderRadius: 999, background: entrada ? "var(--rd-positive)" : "var(--rd-negative)" }} />
+          <span style={RD_LABEL}>{titulo}</span>
+        </span>
+        <span style={{ fontSize: 14.5, fontWeight: 700, color: entrada ? "var(--rd-positive)" : "var(--rd-negative)" }}>{formatCurrency(total)}</span>
+      </div>
+      {itens.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingTop: 4 }}>{vazio}</div>
+      ) : (
+        itens.map((item) => (
+          <LinhaConta2
+            key={item.id}
+            item={item}
+            entrada={entrada}
+            rotuloAcao={entrada ? "Recebi" : "Paguei"}
+            rotuloFeito={entrada ? "Recebido" : "Pago"}
+            onAcao={() => resolver(item)}
+            onAbrir={item.origem === "futuro" ? () => setModal(item.futuro) : null}
+          />
+        ))
+      )}
+      {rodape}
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--rd-s5)" }}>
+      {/* faixa de resumo do mês: o que ainda entra, o que ainda sai e o que sobra */}
+      <div
+        className="flex items-center flex-wrap"
+        style={{ gap: "var(--rd-s5)", background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
+      >
+        <div className="flex items-center flex-wrap" style={{ gap: "var(--rd-s4)" }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
+              Entradas
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-positive)" }}>{formatCurrency(contas.aReceber)}</div>
+          </div>
+          <span className="mbr-oper" style={{ fontSize: 16, color: "var(--rd-text-faint)" }}>−</span>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
+              Saídas
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--rd-negative)" }}>{formatCurrency(contas.aPagar)}</div>
+          </div>
+          <span className="mbr-oper" style={{ fontSize: 16, color: "var(--rd-text-faint)" }}>=</span>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 4 }}>
+              Saldo até {fimDoMes}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: sobra >= 0 ? "var(--rd-text)" : "var(--rd-negative)" }}>
+              {formatCurrency(sobra)}
+            </div>
+          </div>
         </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }}>{nomeDoFuturo(f)}</span>
-            {f.parcelasTotal > 1 && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  borderRadius: 999,
-                  padding: "1px 8px",
-                  background: theme.card2,
-                  color: theme.textMuted,
-                  flexShrink: 0,
-                }}
-              >
-                Parcela {f.parcelaAtual || 1}/{f.parcelasTotal}
+        <div className="flex flex-col" style={{ gap: 8, marginLeft: "auto", minWidth: 220, flex: "1 1 220px", maxWidth: 420 }}>
+          <div className="flex" style={{ height: 6, borderRadius: 999, overflow: "hidden", background: "var(--rd-surface-2)" }}>
+            <span style={{ width: `${(contas.aReceber / totalBarra) * 100}%`, background: "var(--rd-positive)" }} />
+            <span style={{ width: `${(contas.aPagar / totalBarra) * 100}%`, background: "var(--rd-negative)" }} />
+          </div>
+          <div className="flex items-center flex-wrap" style={{ gap: 14, fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+            <span className="flex items-center" style={{ gap: 6 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--rd-positive)" }} />
+              {contas.qtdReceber} recebimento{contas.qtdReceber === 1 ? "" : "s"}
+            </span>
+            <span className="flex items-center" style={{ gap: 6 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--rd-negative)" }} />
+              {contas.qtdPagar} conta{contas.qtdPagar === 1 ? "" : "s"}
+            </span>
+            {contas.vencemNaSemana > 0 && (
+              <span style={{ color: "var(--rd-attention-text)", fontWeight: 700 }}>
+                {contas.vencemNaSemana} vence{contas.vencemNaSemana === 1 ? "" : "m"} essa semana
               </span>
             )}
           </div>
-          <div style={{ color: theme.textMuted, fontFamily: BODY_FONT, fontSize: 12 }}>
-            {f.recorrente ? `Todo mês · dia ${diaDoMes}` : `Vence em ${formatDate(f.vencimento)}`}
-            {jaConfirmadoEsteMes && " · mês atual já lançado"}
-            {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
-            {detalheDoFuturo(f) && ` · ${detalheDoFuturo(f)}`}
-          </div>
-        </div>
-      </div>
-      <div className="flex items-center gap-3 flex-shrink-0">
-        <span style={{ color: f.tipo === "entrada" ? theme.mint : theme.coral, fontFamily: HEAD_FONT, fontSize: 16 }}>
-          {f.tipo === "entrada" ? "+" : "-"} {formatCurrency(f.valor)}
-        </span>
-        {permissoes.podeEditar && !jaConfirmadoEsteMes && onConfirmar && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onConfirmar(f, f.recorrente ? mesAtualKey : undefined);
-            }}
-            title={f.tipo === "entrada" ? "Confirmar recebimento" : "Confirmar pagamento"}
-            className="mbr-hover-grow flex items-center justify-center"
-            style={{ color: theme.mint, width: 30, height: 30 }}
-          >
-            <CheckCircle2 size={16} />
-          </button>
-        )}
-        {permissoes.podeEditar && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              excluir(f.id);
-            }}
-            className="mbr-hover-grow flex items-center justify-center"
-            style={{ color: theme.textMuted, width: 30, height: 30, marginRight: -6 }}
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
-      </div>
-    </div>
-    );
-  };
-
-  return (
-    <div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-        <div className="rounded-2xl p-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            A receber (12 meses)
-          </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 20, color: theme.mint }}>{formatCurrency(previstoEntrada12Meses)}</div>
-          <div className="text-xs mt-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            fixo/mês: {formatCurrency(fixoMensalEntrada)} · avulso: {formatCurrency(avulsosPendentesEntrada)}
-          </div>
-        </div>
-        <div className="rounded-2xl p-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            A pagar (12 meses)
-          </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 20, color: theme.coral }}>{formatCurrency(previstoSaida12Meses)}</div>
-          <div className="text-xs mt-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            fixo/mês: {formatCurrency(fixoMensalSaida)} · avulso: {formatCurrency(avulsosPendentesSaida)}
-          </div>
-        </div>
-        <div className="rounded-2xl p-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            Saldo previsto (12 meses)
-          </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 20, color: saldoPrevisto12Meses >= 0 ? theme.mint : theme.coral }}>
-            {formatCurrency(saldoPrevisto12Meses)}
-          </div>
         </div>
       </div>
 
-      {cobrancasPorDia.length > 0 && (
-        <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-          <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-3">
-            Agenda de cobranças
-          </h3>
-          <div className="flex flex-col">
-            {(verTodasCobrancas ? cobrancasPorDia : cobrancasPorDia.slice(0, 4)).map(([dia, itens], i) => (
-              <div
-                key={dia}
-                className="flex items-start gap-3 py-2.5"
-                style={{ borderTop: i === 0 ? "none" : `1px solid ${theme.divider}` }}
-              >
-                <div
-                  className="flex-shrink-0 flex items-center justify-center rounded-lg"
-                  style={{ width: 38, height: 38, background: theme.card2, color: theme.text, fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 13 }}
-                >
-                  {String(dia).padStart(2, "0")}
-                </div>
-                <div className="flex-1 flex flex-col gap-1 min-w-0">
-                  {itens.map((it) => (
-                    <div key={it.id} className="flex items-center justify-between gap-2 text-xs" style={{ fontFamily: BODY_FONT }}>
-                      <span className="truncate" style={{ color: theme.text }}>
-                        {it.label}
-                        {it.sub ? ` · ${it.sub}` : ""}
-                      </span>
-                      <span style={{ color: theme.mint, fontWeight: 700, flexShrink: 0 }}>{formatCurrency(it.valor)}</span>
-                    </div>
-                  ))}
-                </div>
+      <div className="mbr-futuros-grid">
+        <Coluna
+          entrada
+          titulo="Recebimentos"
+          total={contas.aReceber}
+          itens={contas.receber}
+          vazio={`Nada pra receber em ${monthLabel(mes)}.`}
+          rodape={
+            contas.proximoMes.length > 0 ? (
+              <div style={{ marginTop: "var(--rd-s5)", paddingTop: "var(--rd-s4)", borderTop: "1px solid var(--rd-border)" }}>
+                <div style={{ ...RD_LABEL, color: "var(--rd-text-faint)", marginBottom: "var(--rd-s3)" }}>A partir do mês que vem</div>
+                {contas.proximoMes.map((item) => (
+                  <LinhaConta2 key={item.id} item={{ ...item, feito: false, diasAte: 99 }} entrada rotuloAcao="" rotuloFeito="" />
+                ))}
               </div>
-            ))}
-          </div>
-          {cobrancasPorDia.length > 4 && (
-            <button
-              onClick={() => setVerTodasCobrancas((v) => !v)}
-              className="text-xs font-semibold mt-2"
-              style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
-            >
-              {verTodasCobrancas ? "Ver menos" : `Ver mais (${cobrancasPorDia.length - 4})`}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-        <h3 style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }} className="mb-3">
-          Previsão por mês
-        </h3>
-        {futuros.length === 0 ? (
-          <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            Cadastre uma conta futura pra ver a previsão aqui.
-          </div>
-        ) : (
-          <div style={{ width: "100%", height: 280 }}>
-            <ResponsiveContainer>
-              <ComposedChart data={projecao} margin={{ left: -12 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder} vertical={false} />
-                <XAxis dataKey="mes" stroke={theme.textMuted} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={theme.textMuted} fontSize={11} tickFormatter={formatCompact} width={56} axisLine={false} tickLine={false} />
-                <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [formatCurrency(value), name]} />} />
-                <Legend />
-                <Bar dataKey="entrada" name="A receber" fill={theme.mint} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="saida" name="A pagar" fill={theme.coral} radius={[4, 4, 0, 0]} />
-                <Line
-                  type="monotone"
-                  dataKey="saldo"
-                  name="Saldo"
-                  stroke={theme.amber}
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: theme.amber, strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="saldo"
-                  stroke={mixColors(theme.amber, "#FFFFFF", 0.65)}
-                  strokeOpacity={0.55}
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                  legendType="none"
-                  className="mbr-linha-cometa"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-      </div>
-
-      {recorrentes.length > 0 && (
-        <div className="mb-4">
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-            Todo mês
-          </div>
-          <div className="flex flex-col gap-2">
-            {(verTodosFixos ? gruposFixos : gruposFixos.slice(0, 4)).map((g) =>
-              g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
-            )}
-          </div>
-          {gruposFixos.length > 4 && (
-            <button
-              onClick={() => setVerTodosFixos((v) => !v)}
-              className="text-xs font-semibold mt-2"
-              style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
-            >
-              {verTodosFixos ? "Ver menos" : `Ver mais (${gruposFixos.length - 4})`}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div>
-        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Parcelamentos
-        </div>
-        {gruposAvulsos.length === 0 ? (
-          <div className="rounded-2xl p-6 text-center" style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT, border: `1px solid ${theme.cardBorder}` }}>
-            Nenhum parcelamento ou conta com data marcada.
-          </div>
-        ) : (
-          <>
-            <div className="flex flex-col gap-2">
-              {(verTodosAvulsos ? gruposAvulsos : gruposAvulsos.slice(0, 4)).map((g) =>
-                g.itens.length === 1 ? <FuturoRow key={g.chave} f={g.itens[0]} /> : <GrupoRow key={g.chave} grupo={g} />
-              )}
-            </div>
-            {gruposAvulsos.length > 4 && (
-              <button
-                onClick={() => setVerTodosAvulsos((v) => !v)}
-                className="text-xs font-semibold mt-2"
-                style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
-              >
-                {verTodosAvulsos ? "Ver menos" : `Ver mais (${gruposAvulsos.length - 4})`}
-              </button>
-            )}
-          </>
-        )}
+            ) : null
+          }
+        />
+        <Coluna
+          entrada={false}
+          titulo="Pagamentos"
+          total={contas.aPagar}
+          itens={contas.pagar}
+          vazio={`Nenhuma conta em ${monthLabel(mes)}.`}
+        />
       </div>
 
       {modal && (
@@ -4062,10 +5609,39 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     setModal(null);
   };
 
+  // EXCLUIR não era mais difícil que esbarrar: o ícone de lixeira mora na mesma linha do
+  // valor, a linha inteira é clicável, e o clique apagava na hora, sem pergunta e sem
+  // volta (o banco guarda um JSON só, substituído a cada gravação — apagou, acabou).
+  // Agora pergunta antes, dizendo o que vai sumir, e ainda deixa desfazer depois.
+  const [desfazer, setDesfazer] = useState(null);
+  const desfazerTimer = useRef(null);
+  const oferecerDesfazer = (rotulo, alvo, onde) => {
+    if (desfazerTimer.current) clearTimeout(desfazerTimer.current);
+    setDesfazer({ rotulo, alvo, onde });
+    desfazerTimer.current = setTimeout(() => setDesfazer(null), 15000);
+  };
+  useEffect(() => () => desfazerTimer.current && clearTimeout(desfazerTimer.current), []);
+
+  const restaurar = async () => {
+    if (!desfazer) return;
+    if (desfazer.onde === "futuro") await persistFuturos([...(futuros || []), desfazer.alvo]);
+    else await persist([...lancamentos, desfazer.alvo]);
+    if (desfazerTimer.current) clearTimeout(desfazerTimer.current);
+    setDesfazer(null);
+  };
+
   const excluir = async (id) => {
+    const alvo = lancamentos.find((x) => x.id === id);
+    if (!alvo) return false;
+    const rotulo = `${alvo.categoria || alvo.descricao || "Lançamento"} · ${formatCurrency(alvo.valor)}`;
+    if (!window.confirm(`Excluir ${alvo.tipo === "entrada" ? "a entrada" : "a saída"} "${rotulo}" de ${formatDate(alvo.data)}?`)) return false;
     const ok = await persist(lancamentos.filter((x) => x.id !== id));
-    if (!ok) window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
-    return ok;
+    if (!ok) {
+      window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
+      return false;
+    }
+    oferecerDesfazer(rotulo, alvo, "lancamento");
+    return true;
   };
   const ordenados = [...lancamentos].sort((a, b) => (a.data < b.data ? 1 : -1));
 
@@ -4128,7 +5704,7 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
       // aparece como título da linha). Antes vinha a categoria aqui, então uma conta
       // chamada "X" com categoria "Seguro" virava um lançamento chamado "Seguro"
       categoria: nomeDoFuturo(original),
-      valor: Number(original.valor) || 0,
+      valor: valorDoFuturo(original, motos),
       descricao: detalheDoFuturo(original),
       forma: "",
       motoId: original.motoId || "",
@@ -4156,288 +5732,395 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
     mesesComLancamentos.find((m) => m <= mesAtualKey) ||
     mesesOrdenados[0] ||
     null;
-  const [expandido, setExpandido] = useState(mesInicial);
+  // A aba Lançado mostra UM mês por vez. Antes listava todos os meses empilhados, cada
+  // um com seu resumo: virava um paredão de informação pra achar o mês que interessa.
+  const [mesVisivel, setMesVisivel] = useState(mesInicial || mesAtualKey);
+  const mesesReais = mesesOrdenados.filter((m) => m !== "sem-data");
+  const mesMaisAntigo = mesesReais[mesesReais.length - 1] || mesAtualKey;
+  const mesMaisNovo = mesesReais[0] && mesesReais[0] > mesAtualKey ? mesesReais[0] : mesAtualKey;
+  const mesVizinho = (passo) => {
+    const [ano, mesN] = (mesVisivel || mesAtualKey).split("-").map(Number);
+    const d = new Date(ano, mesN - 1 + passo, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const podeVoltarMes = mesVisivel > mesMaisAntigo;
+  // os números e a lista do mês que está na tela (lançado + o que ainda está previsto)
+  // A aba "Lançado" mostra só o que ACONTECEU. O que ainda está previsto vive na aba
+  // Futuros — antes as contas previstas apareciam aqui também, o que duplicava a
+  // informação e ainda entrava sem classificação no "Para onde foi".
+  const lancadosDoMes = porMes[mesVisivel] || [];
+  const itensDoMes = [...lancadosDoMes].sort((a, b) => (a.data < b.data ? 1 : -1));
+  const entradaDoMes = lancadosDoMes.filter((l) => l.tipo === "entrada").reduce((s2, l) => s2 + Number(l.valor), 0);
+  const saidaDoMes = lancadosDoMes.filter((l) => l.tipo === "saida").reduce((s2, l) => s2 + Number(l.valor), 0);
+  const saldoDoMes = entradaDoMes - saidaDoMes;
   const [detalheAberto, setDetalheAberto] = useState(null);
   const [grupoLancAberto, setGrupoLancAberto] = useState(null);
+  const [filtroTipo, setFiltroTipo] = useState("tudo");
+  const [busca, setBusca] = useState("");
 
-  // Uma linha de lançamento. Virou componente pra poder aparecer tanto solta quanto
-  // dentro de um grupo de lançamentos de mesmo nome (ex.: o rastreador lançado pra 11
-  // motos no mesmo mês, que antes eram 11 linhas iguais seguidas).
-  const LinhaLancamento = ({ l, ultimo }) => {
-                    const motoLigada = motos?.find((m) => m.id === l.motoId);
-                    const detalheEsteAberto = detalheAberto === l.id;
-                    const temDetalhe = !!(l.natureza || l.forma || l.descricao);
-                    const pendente = !!l._pendente;
-                    const corItem = pendente ? theme.amber : l.tipo === "entrada" ? theme.mint : theme.coral;
-                    return (
-                      <div
-                        key={l.id}
-                        style={{
-                          background: pendente ? `${theme.amber}14` : theme.card2,
-                          borderBottom: ultimo ? "none" : `1px solid ${theme.divider}`,
-                        }}
-                      >
-                        <div
-                          onClick={() => setDetalheAberto(detalheEsteAberto ? null : l.id)}
-                          className="flex items-center justify-between px-4 py-3 cursor-pointer"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div
-                              className="flex items-center justify-center flex-shrink-0"
-                              style={{ width: 28, height: 28, borderRadius: 8, background: theme.card2 }}
-                            >
-                              {pendente ? (
-                                <Clock size={16} color={theme.amber} />
-                              ) : l.tipo === "entrada" ? (
-                                <TrendingUp size={16} color={theme.mint} />
-                              ) : (
-                                <TrendingDown size={16} color={theme.coral} />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }}>{l.categoria || "Sem categoria"}</span>
-                                {l.parcelasTotal > 1 && (
-                                  <span
-                                    className="text-xs font-semibold rounded-full px-2"
-                                    style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT }}
-                                  >
-                                    Parcela {l.parcelaAtual || 1}/{l.parcelasTotal}
-                                  </span>
-                                )}
-                                {pendente && (
-                                  <span
-                                    className="text-xs font-semibold rounded-full px-2"
-                                    style={{ background: `${theme.amber}26`, color: theme.amber, fontFamily: BODY_FONT }}
-                                  >
-                                    Previsto
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ color: theme.textFaint, fontFamily: BODY_FONT, fontSize: 12 }}>
-                                {formatDate(l.data)}
-                                {motoLigada && ` · ${formatPlaca(motoLigada.placa)}`}
-                                {pendente && l.recorrente && " · fixo mensal"}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <span style={{ color: corItem, fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 16 }}>
-                              {l.tipo === "entrada" ? "+" : "-"} {formatCurrency(l.valor)}
-                            </span>
-                            {(temDetalhe || pendente || permissoes.podeEditar) &&
-                              (detalheEsteAberto ? <ChevronUp size={16} color={theme.textMuted} /> : <ChevronDown size={16} color={theme.textMuted} />)}
-                            {!pendente && permissoes.podeEditar && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  excluir(l.id);
-                                }}
-                                className="mbr-hover-grow flex items-center justify-center"
-                                style={{ color: theme.textMuted, width: 36, height: 36, marginRight: -8 }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        {pendente ? (
-                          <Collapse open={detalheEsteAberto}>
-                            <div className="px-4 pb-3 flex flex-col gap-2" style={{ borderTop: `1px solid ${theme.divider}`, paddingTop: 10 }}>
-                              <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                                Ainda não {l.tipo === "entrada" ? "recebido" : "pago"} — essa conta está cadastrada em
-                                "Futuros" e ainda não virou um lançamento real.
-                              </div>
-                              {permissoes.podeEditar && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    confirmarFuturo(l);
-                                  }}
-                                  className="flex items-center justify-center gap-1.5 rounded-xl py-2 font-semibold text-sm"
-                                  style={{ background: theme.mint, color: theme.mintText }}
-                                >
-                                  <CheckCircle2 size={14} /> Confirmar {l.tipo === "entrada" ? "recebimento" : "pagamento"}
-                                </button>
-                              )}
-                            </div>
-                          </Collapse>
-                        ) : (
-                        <Collapse open={detalheEsteAberto}>
-                          <div className="px-4 pb-3 flex flex-col gap-1.5" style={{ borderTop: `1px solid ${theme.divider}`, paddingTop: 10 }}>
-                            {l.natureza && (
-                              <div className="flex items-center justify-between text-xs" style={{ fontFamily: BODY_FONT }}>
-                                <span style={{ color: theme.textFaint }}>Natureza</span>
-                                <span style={{ color: theme.textMuted }}>{l.natureza}</span>
-                              </div>
-                            )}
-                            {l.forma && (
-                              <div className="flex items-center justify-between text-xs" style={{ fontFamily: BODY_FONT }}>
-                                <span style={{ color: theme.textFaint }}>Forma de pagamento</span>
-                                <span style={{ color: theme.textMuted }}>{l.forma}</span>
-                              </div>
-                            )}
-                            {l.descricao && (
-                              <div className="flex items-center justify-between gap-3 text-xs" style={{ fontFamily: BODY_FONT }}>
-                                <span style={{ color: theme.textFaint, flexShrink: 0 }}>Detalhe</span>
-                                <span style={{ color: theme.textMuted, textAlign: "right" }}>{l.descricao}</span>
-                              </div>
-                            )}
-                            {permissoes.podeEditar && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setModal(l);
-                                }}
-                                className="text-xs font-semibold flex items-center gap-1 mt-1"
-                                style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
-                              >
-                                <Pencil size={12} /> Editar
-                              </button>
-                            )}
-                          </div>
-                        </Collapse>
-                        )}
-                      </div>
-                    );
+  // "Recebi" na aba Futuros, numa linha de contrato: cria a entrada no Caixa já ligada
+  // à moto — é o que faz a cobrança sair de "a receber" em toda a tela
+  const receberMensalidade = async (moto, mesKey) => {
+    if (!moto?.contratoAtual) return;
+    const valor = Number(moto.contratoAtual.valorMensal) || 0;
+    if (!window.confirm(`Lançar ${formatCurrency(valor)} recebidos de ${formatPlaca(moto.placa)}?`)) return;
+    const dia = Math.min(diaVencimentoDoContrato(moto.contratoAtual) || 1, new Date(Number(mesKey.slice(0, 4)), Number(mesKey.slice(5, 7)), 0).getDate());
+    const hoje = todayISO();
+    await persist([
+      ...lancamentos,
+      {
+        id: uid(),
+        // dentro do mês corrente usa hoje; num mês passado/futuro usa o dia do vencimento
+        data: mesKey === hoje.slice(0, 7) ? hoje : `${mesKey}-${String(dia).padStart(2, "0")}`,
+        tipo: "entrada",
+        natureza: "Operacional",
+        categoria: `Mensalidade ${formatPlaca(moto.placa)}`,
+        valor,
+        descricao: "",
+        forma: "",
+        motoId: moto.id,
+        parcelas: 1,
+      },
+    ]);
   };
 
-  // agrupa, DENTRO do mês, os lançamentos que têm o mesmo nome (e mesmo tipo) — nada de
-  // agrupar por mês ou ano, só nome igual com nome igual
+  // junta numa linha só os lançamentos de mesmo nome no mês. A comparação ignora
+  // acento, maiúscula e espaço repetido — "Comissão Rogério" e "Comissao Rogerio"
+  // são a mesma coisa pra quem lançou, e antes viravam duas linhas.
   const agruparLancamentos = (lista) => {
     const grupos = new Map();
     lista.forEach((l) => {
-      const chave = `${(l.categoria || "").trim().toLowerCase()}|${l.tipo}|${l._pendente ? 1 : 0}`;
+      const chave = `${semAcento((l.categoria || "").replace(/\s+/g, " ").trim())}|${l.tipo}`;
       if (!grupos.has(chave)) grupos.set(chave, { chave, itens: [] });
       grupos.get(chave).itens.push(l);
     });
     return [...grupos.values()];
   };
 
-  const GrupoLancamentos = ({ grupo, ultimo }) => {
+  // busca e filtro por tipo valem sobre o mês que está na tela
+  const textoDoItem = (l) => {
+    const moto = motos?.find((m) => m.id === l.motoId);
+    return semAcento(`${l.categoria || ""} ${l.descricao || ""} ${l.natureza || ""} ${moto ? `${moto.placa} ${formatPlaca(moto.placa)}` : ""}`);
+  };
+  const buscaLimpa = semAcento(busca.trim());
+  const itensFiltrados = itensDoMes.filter(
+    (l) => (filtroTipo === "tudo" || l.tipo === filtroTipo) && (!buscaLimpa || textoDoItem(l).includes(buscaLimpa))
+  );
+  // a lista inteira fica dentro do cartão e rola por dentro dele: assim o mês com 5
+  // lançamentos e o mês com 40 ocupam exatamente a mesma altura na tela
+  const gruposDoMes = agruparLancamentos(itensFiltrados);
+  const somaVisivel = itensFiltrados.reduce((s2, l) => s2 + (l.tipo === "entrada" ? 1 : -1) * (Number(l.valor) || 0), 0);
+
+  // PARA ONDE FOI — as saídas do mês somadas por natureza, a maior primeiro
+  // as saídas do mês por classificação — as mesmas linhas que a lista mostra
+  const paraOndeFoi = (() => {
+    const cores = ["var(--rd-negative)", "var(--rd-attention)", "var(--rd-brand-light)", "var(--rd-text-muted)"];
+    const por = new Map();
+    itensDoMes
+      .filter((l) => l.tipo === "saida")
+      .forEach((l) => {
+        const nome = l.natureza || "Sem classificação";
+        por.set(nome, (por.get(nome) || 0) + (Number(l.valor) || 0));
+      });
+    const lista = [...por.entries()].map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor);
+    const maior = lista[0]?.valor || 1;
+    return lista.slice(0, 6).map((c, i) => ({ ...c, pct: Math.max(3, (c.valor / maior) * 100), cor: cores[i % cores.length] }));
+  })();
+
+  // ÚLTIMOS 6 MESES — o saldo de cada um, terminando no mês que está na tela
+  const seisMeses = (() => {
+    const [ano, mesN] = (mesVisivel || mesAtualKey).split("-").map(Number);
+    const out = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(ano, mesN - 1 - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const doMes = porMes[key] || [];
+      const entrou = doMes.filter((l) => l.tipo === "entrada").reduce((s2, l) => s2 + Number(l.valor || 0), 0);
+      const saiu = doMes.filter((l) => l.tipo === "saida").reduce((s2, l) => s2 + Number(l.valor || 0), 0);
+      out.push({ key, rotulo: monthLabel(key).slice(0, 3).toLowerCase(), saldo: entrou - saiu });
+    }
+    return out;
+  })();
+  const maxSeis = Math.max(1, ...seisMeses.map((m) => Math.abs(m.saldo)));
+  const mediaSeis = seisMeses.reduce((s2, m) => s2 + m.saldo, 0) / (seisMeses.length || 1);
+
+  // o que ainda falta acontecer no mês — mesma conta da aba Futuros, pra fechar o
+  // painel da direita com "o que já foi" em cima e "o que falta" embaixo
+  const faltaNoMes = contasDoMes(futuros, motos, clientes, lancamentos, mesVisivel);
+
+  // EXPORTAR — baixa o mês em CSV (abre direto no Excel/Sheets)
+  const exportarMes = () => {
+    const linhas = [["Data", "Tipo", "Nome", "Classificação", "Moto", "Valor"]];
+    [...itensDoMes]
+      .filter((l) => !l._pendente)
+      .sort((a, b) => (a.data < b.data ? -1 : 1))
+      .forEach((l) => {
+        const moto = motos?.find((m) => m.id === l.motoId);
+        linhas.push([
+          formatDate(l.data),
+          l.tipo === "entrada" ? "Entrada" : "Saída",
+          l.categoria || "",
+          l.natureza || "",
+          moto ? formatPlaca(moto.placa) : "",
+          String(Number(l.valor) || 0).replace(".", ","),
+        ]);
+      });
+    const csv = linhas.map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `caixa-${mesVisivel}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // UMA LINHA DA LISTA — serve pro lançamento solto e pro grupo de iguais (o rastreador
+  // lançado pra 8 motos no mesmo mês vira uma linha "8x" que abre)
+  const LinhaCaixa = ({ grupo }) => {
     const itens = grupo.itens;
     const primeiro = itens[0];
+    const varios = itens.length > 1;
     const aberto = grupoLancAberto === grupo.chave;
-    const total = itens.reduce((s, l) => s + (Number(l.valor) || 0), 0);
+    const total = itens.reduce((s2, l) => s2 + (Number(l.valor) || 0), 0);
     const pendente = !!primeiro._pendente;
-    const cor = pendente ? theme.amber : primeiro.tipo === "entrada" ? theme.mint : theme.coral;
+    const entrada = primeiro.tipo === "entrada";
+    const cor = pendente ? "var(--rd-attention-text)" : entrada ? "var(--rd-positive)" : "var(--rd-negative)";
+    const moto = motos?.find((m) => m.id === primeiro.motoId);
+    const placas = itens
+      .map((x) => motos?.find((m) => m.id === x.motoId))
+      .filter(Boolean)
+      .map((m) => formatPlaca(m.placa));
+    const sub = varios
+      ? placas.length > 0
+        ? [...placas.slice(0, 3), ...(placas.length > 3 ? [`+${placas.length - 3}`] : [])].join(" · ")
+        : `${itens.length} lançamentos iguais`
+      : [
+          moto ? formatPlaca(moto.placa) : "",
+          primeiro.parcelasTotal > 1 ? `parcela ${primeiro.parcelaAtual || 1}/${primeiro.parcelasTotal}` : "",
+          primeiro.qtdMotos > 1 ? `${formatCurrency(primeiro.valorUnitario)} por moto × ${primeiro.qtdMotos}` : "",
+          primeiro.descricao || "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+    const mesCurto = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number((primeiro.data || "").slice(5, 7)) - 1] || "";
     return (
-      <div style={{ borderBottom: ultimo ? "none" : `1px solid ${theme.divider}`, background: pendente ? theme.card2 : "transparent" }}>
+      <div>
         <div
-          onClick={() => setGrupoLancAberto(aberto ? null : grupo.chave)}
-          className="flex items-center justify-between cursor-pointer"
-          style={{ padding: "13px 18px" }}
+          className="flex items-center flex-wrap"
+          style={{ gap: 10, padding: "11px 0", borderTop: "1px solid var(--rd-row-border)", cursor: varios ? "pointer" : "default" }}
+          onClick={varios ? () => setGrupoLancAberto(aberto ? null : grupo.chave) : undefined}
         >
-          <div className="flex items-center min-w-0" style={{ gap: 12 }}>
-            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 30, height: 30, borderRadius: 9, background: theme.card2 }}>
-              {primeiro.tipo === "entrada" ? <TrendingUp size={15} color={theme.mint} /> : <TrendingDown size={15} color={theme.coral} />}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
-                <span style={{ color: theme.text, fontWeight: 600, fontSize: 13.5 }}>{primeiro.categoria || "Sem categoria"}</span>
-                <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "1px 8px", background: theme.card2, color: theme.textMuted }}>
+          <div className="flex flex-col items-center justify-center flex-none" style={{ width: 40 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1, color: "var(--rd-text)" }}>{(primeiro.data || "").slice(8, 10) || "--"}</span>
+            <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--rd-text-faint)" }}>{mesCurto}</span>
+          </div>
+          <span
+            className="flex items-center justify-center flex-none"
+            style={{ width: 30, height: 30, borderRadius: 9, background: pendente ? "var(--rd-attention-bg-2)" : "var(--rd-surface-2)" }}
+          >
+            {pendente ? <Clock size={14} color="var(--rd-attention)" /> : entrada ? <TrendingUp size={14} color="var(--rd-positive)" /> : <TrendingDown size={14} color="var(--rd-negative)" />}
+          </span>
+          <div className="flex flex-col" style={{ gap: 2, minWidth: 0, flex: "1 1 130px" }}>
+            <div className="flex items-center flex-wrap" style={{ gap: 7 }}>
+              <span className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>{primeiro.categoria || "Sem nome"}</span>
+              {varios && (
+                <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 7px", background: "var(--rd-surface-2)", color: "var(--rd-text-dim)" }}>
                   {itens.length}x
                 </span>
-              </div>
-              <div style={{ color: theme.textMuted, fontSize: 11.5 }}>
-                {/* mostra as placas no resumo: sem isso, três trocas de óleo de motos
-                    diferentes viravam uma linha só e dava a impressão de terem sumido */}
-                {(() => {
-                  const placas = itens
-                    .map((x) => motos?.find((m) => m.id === x.motoId))
-                    .filter(Boolean)
-                    .map((m) => formatPlaca(m.placa));
-                  return placas.length > 0
-                    ? placas.join(" · ")
-                    : `${itens.length} lançamentos iguais neste mês`;
-                })()}
-              </div>
+              )}
+              {pendente && (
+                <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 7px", background: "var(--rd-attention-bg-2)", color: "var(--rd-attention-text)" }}>
+                  Previsto
+                </span>
+              )}
             </div>
+            {sub && <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>{sub}</span>}
           </div>
-          <div className="flex items-center flex-shrink-0" style={{ gap: 4 }}>
-            <span style={{ color: cor, fontWeight: 700, fontSize: 15 }}>
-              {primeiro.tipo === "entrada" ? "+ " : "\u2212 "}
-              {formatCurrency(total)}
+          {/* num grupo com classificações diferentes a etiqueta mentiria — aí ela some da
+              linha do grupo e aparece em cada linha de dentro */}
+          {primeiro.natureza && itens.every((x) => (x.natureza || "") === (primeiro.natureza || "")) && (
+            <span
+              className="mbr-col-extra flex-none"
+              style={{
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                borderRadius: 999,
+                padding: "3px 9px",
+                border: "1px solid var(--rd-border)",
+                color: "var(--rd-text-muted)",
+                whiteSpace: "nowrap" }}
+            >
+              {primeiro.natureza}
             </span>
-            {aberto ? <ChevronUp size={16} color={theme.textMuted} /> : <ChevronDown size={16} color={theme.textMuted} />}
-          </div>
+          )}
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: cor, whiteSpace: "nowrap", marginLeft: "auto" }}>
+            {entrada ? "+ " : "− "}
+            {formatCurrency(total)}
+          </span>
+          {varios ? (
+            aberto ? <ChevronUp size={15} color="var(--rd-text-dim)" /> : <ChevronDown size={15} color="var(--rd-text-dim)" />
+          ) : pendente ? (
+            permissoes.podeEditar && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  confirmarFuturo(primeiro);
+                }}
+                className="flex-none mbr-hover-grow"
+                style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "5px 11px", border: "1px solid var(--rd-attention-border)", color: "var(--rd-attention-text)" }}
+              >
+                Confirmar
+              </button>
+            )
+          ) : (
+            permissoes.podeEditar && (
+              <span className="flex items-center flex-none" style={{ gap: 2 }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // repete um gasto/recebimento fixo (rastreador, aluguel do ponto,
+                    // contabilidade...) sem digitar tudo de novo todo mês — mesmos dados,
+                    // só a data já vem pra hoje e vira um lançamento novo, não uma edição
+                    setModal({
+                      ...primeiro,
+                      id: uid(),
+                      data: todayISO(),
+                      valorUnitario: undefined,
+                      qtdMotos: undefined,
+                      parcelaAtual: undefined,
+                      parcelasTotal: undefined,
+                      grupoParcelas: undefined,
+                    });
+                  }}
+                  title="Duplicar"
+                  className="flex items-center justify-center mbr-hover-grow"
+                  style={{ width: 26, height: 26, color: "var(--rd-text-faint)" }}
+                >
+                  <Copy size={13} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setModal(primeiro); }}
+                  title="Editar"
+                  className="flex items-center justify-center mbr-hover-grow"
+                  style={{ width: 26, height: 26, color: "var(--rd-text-faint)" }}
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); excluir(primeiro.id); }}
+                  title="Excluir"
+                  className="flex items-center justify-center mbr-hover-grow"
+                  style={{ width: 26, height: 26, color: "var(--rd-negative)" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </span>
+            )
+          )}
         </div>
-        <Collapse open={aberto}>
-          <div style={{ borderTop: `1px solid ${theme.divider}` }}>
-            {itens.map((l, i) => (
-              <LinhaLancamento key={l.id} l={l} ultimo={i === itens.length - 1} />
-            ))}
-          </div>
-        </Collapse>
+        {varios && (
+          <Collapse open={aberto}>
+            <div style={{ paddingLeft: 52 }}>
+              {itens.map((l) => (
+                <LinhaCaixa key={l.id} grupo={{ chave: `um:${l.id}`, itens: [l] }} />
+              ))}
+            </div>
+          </Collapse>
+        )}
       </div>
     );
   };
 
-  const [verTodosResumo, setVerTodosResumo] = useState(false);
   const [view, setView] = useState("lancado");
+  // em "Futuros" dá pra olhar o que vem pela frente (até 12 meses); em "Lançado" não
+  // faz sentido passar do mês corrente — lá só existe o que já aconteceu
+  const mesLimite = (() => {
+    if (view !== "futuros") return mesMaisNovo;
+    const [ano, mesN] = mesAtualKey.split("-").map(Number);
+    const d = new Date(ano, mesN - 1 + 12, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
+  const podeAvancarMes = mesVisivel < mesLimite;
   const futurosViewRef = useRef(null);
 
-  const viewToggleRef = useRef(null);
-  const viewSlotRefs = useRef({});
-  const [viewPillRect, setViewPillRect] = useState(null);
-
-  // mesma pílula deslizante do menu de baixo, só que aqui entre "Lançado"/"Futuros" —
-  // mede a posição do botão ativo e anima a faixa verde até ali em vez de simplesmente
-  // trocar o fundo do botão na hora
-  useEffect(() => {
-    const medir = () => {
-      const slot = viewSlotRefs.current[view];
-      const container = viewToggleRef.current;
-      if (!slot || !container) return;
-      const slotRect = slot.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      setViewPillRect({ left: slotRect.left - containerRect.left, top: slotRect.top - containerRect.top, width: slotRect.width, height: slotRect.height });
-    };
-    medir();
-    window.addEventListener("resize", medir);
-    return () => window.removeEventListener("resize", medir);
-  }, [view]);
-
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <h2 style={{ fontFamily: HEAD_FONT, fontSize: 22, fontWeight: 700, color: theme.mint }}>Fluxo de caixa</h2>
-        <div className="flex items-center gap-2">
-          <div ref={viewToggleRef} className="relative flex rounded-xl p-1" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-            {viewPillRect && (
-              <span
-                className="absolute rounded-lg"
-                style={{
-                  left: 0,
-                  top: viewPillRect.top,
-                  width: viewPillRect.width,
-                  height: viewPillRect.height,
-                  background: theme.mint,
-                  willChange: "transform",
-                  transform: `translateX(${viewPillRect.left}px)`,
-                  transition: "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)",
-                }}
-              />
-            )}
+    <div className="flex flex-col" style={{ gap: 18, fontFamily: "var(--rd-font)" }}>
+      <div className="flex items-center flex-wrap" style={{ gap: 12 }}>
+        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>Caixa</h1>
+        {/* o mês manda nas duas abas: em "Lançado" recorta a lista, em "Futuros" diz
+            de qual mês são as contas */}
+        <div
+          className="flex items-center"
+          style={{ gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
+        >
+          <button
+            onClick={() => podeVoltarMes && setMesVisivel(mesVizinho(-1))}
+            disabled={!podeVoltarMes}
+            aria-label="Mês anterior"
+            className="flex items-center justify-center"
+            style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeVoltarMes ? 1 : 0.35 }}
+          >
+            <ChevronLeft size={15} strokeWidth={2.75} />
+          </button>
+          <span className="text-center" style={{ minWidth: 62, fontSize: 12.5, fontWeight: 700, color: "var(--rd-text)" }}>
+            {monthLabel(mesVisivel)}
+          </span>
+          <button
+            onClick={() => podeAvancarMes && setMesVisivel(mesVizinho(1))}
+            disabled={!podeAvancarMes}
+            aria-label="Próximo mês"
+            className="flex items-center justify-center"
+            style={{ width: 24, height: 24, borderRadius: 999, background: "none", color: "var(--rd-text-muted)", opacity: podeAvancarMes ? 1 : 0.35 }}
+          >
+            <ChevronRight size={15} strokeWidth={2.75} />
+          </button>
+        </div>
+        {mesVisivel !== mesAtualKey && (
+          <button
+            onClick={() => setMesVisivel(mesAtualKey)}
+            style={{ fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "5px 12px", background: "var(--rd-brand)", color: "var(--rd-brand-light)" }}
+          >
+            Atual
+          </button>
+        )}
+        <div className="flex items-center flex-wrap" style={{ gap: 10, marginLeft: "auto" }}>
+          {/* mesma pílula usada em todo o site (.mbr-filtros): o destaque é o fundo do
+              próprio botão, então ele nasce alinhado. A versão anterior desenhava uma
+              faixa verde por cima, posicionada por medição — e bastava a medida vir de
+              um jeito pro destaque ficar torto dentro da moldura */}
+          <div className="mbr-filtros" style={{ minWidth: 0 }}>
             {[
-              { id: "lancado", label: "Lançado" },
-              { id: "futuros", label: "Futuros" },
+              { id: "lancado", label: "Extrato" },
+              { id: "futuros", label: "Agendamentos" },
             ].map((v) => (
               <button
                 key={v.id}
-                ref={(el) => (viewSlotRefs.current[v.id] = el)}
                 onClick={() => setView(v.id)}
-                className="relative rounded-lg px-3 py-1.5 text-sm font-semibold"
                 style={{
-                  color: view === v.id ? theme.mintText : theme.textMuted,
-                  transition: "color 0.15s ease",
-                  zIndex: 1,
-                }}
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  fontSize: 12.5,
+                  fontWeight: view === v.id ? 700 : 600,
+                  whiteSpace: "nowrap",
+                  background: view === v.id ? "var(--rd-brand)" : "transparent",
+                  color: view === v.id ? "#F0F5EE" : "var(--rd-text-dim)",
+                  transition: "background 0.2s ease, color 0.15s ease" }}
               >
                 {v.label}
               </button>
             ))}
           </div>
+          {view === "lancado" && (
+            <button
+              onClick={exportarMes}
+              className="flex items-center"
+              style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "8px 15px", fontSize: 12.5, fontWeight: 600 }}
+            >
+              <Download size={14} strokeWidth={2.5} /> Exportar
+            </button>
+          )}
           {/* um botão só que "vira" o outro ao trocar de aba — mesmo elemento, o texto
               troca (num único span remontado, sem dois textos coexistindo) e a caixa
               cresce/encolhe pra caber, em vez de um botão sumir aqui e outro nascer
@@ -4445,16 +6128,20 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           {permissoes.podeEditar && (
             <button
               onClick={() => (view === "lancado" ? setModal(emptyLancamento()) : futurosViewRef.current?.abrirNovo())}
-              className="flex items-center gap-1 rounded-xl px-3 py-2 text-sm font-semibold overflow-hidden"
+              className="flex items-center overflow-hidden"
               style={{
-                background: theme.mint,
-                color: theme.mintText,
+                gap: 6,
+                background: "var(--rd-brand-soft)",
+                color: "var(--rd-shell)",
+                borderRadius: 999,
+                padding: "10px 16px",
+                fontSize: 13.5,
+                fontWeight: 700,
                 whiteSpace: "nowrap",
-                width: view === "lancado" ? 96 : 140,
-                transition: "width 0.32s cubic-bezier(0.22, 1, 0.36, 1)",
-              }}
+                width: view === "lancado" ? 100 : 150,
+                transition: "width 0.32s cubic-bezier(0.22, 1, 0.36, 1)" }}
             >
-              <Plus size={16} style={{ flexShrink: 0 }} />
+              <Plus size={15} strokeWidth={3} style={{ flexShrink: 0 }} />
               <span key={view} className="mbr-rotulo-troca" style={{ display: "inline-block" }}>
                 {view === "lancado" ? "Novo" : "Nova conta"}
               </span>
@@ -4471,118 +6158,256 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           motos={motos}
           clientes={clientes}
           onConfirmar={confirmarFuturo}
+          mesVisivel={mesVisivel}
           mesAtualKey={mesAtualKey}
+          lancamentos={lancamentos}
+          onReceberContrato={receberMensalidade}
+          onExcluido={(f, rotulo) => oferecerDesfazer(rotulo, f, "futuro")}
         />
       ) : (
         <>
-      {mesesOrdenados.length === 0 && (
-        <div className="rounded-2xl p-6 text-center" style={{ background: theme.card, color: theme.textMuted, fontFamily: BODY_FONT, border: `1px solid ${theme.cardBorder}` }}>
-          Nenhum lançamento ainda.
-        </div>
-      )}
-
-      {ordenados.length > 0 && (
-        <div
-          className="rounded-2xl p-4 mb-3"
-          style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}
-        >
-          <SectionTitle className="mb-3">Resumo mensal</SectionTitle>
-          <div className="flex flex-col gap-2">
-            {(verTodosResumo ? mesesComLancamentos : mesesComLancamentos.slice(0, 1)).map((mesKey) => {
-              const itensResumo = porMes[mesKey];
-              const entradaResumo = itensResumo.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
-              const saidaResumo = itensResumo.filter((l) => l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0);
-              const saldoResumo = entradaResumo - saidaResumo;
-              return (
-                <div
-                  key={mesKey}
-                  className="rounded-xl px-3 py-2.5"
-                  style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}
-                >
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span style={{ color: theme.text, fontWeight: 700, fontFamily: HEAD_FONT, fontSize: 14 }}>
-                      {mesKey === "sem-data" ? "Sem data" : monthLabel(mesKey)}
-                    </span>
-                    <span
-                      style={{
-                        color: saldoResumo >= 0 ? theme.mint : theme.coral,
-                        fontWeight: 700,
-                        fontFamily: BODY_FONT,
-                        fontSize: 14,
-                      }}
-                    >
-                      Saldo: {formatCurrency(saldoResumo)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4 flex-wrap text-xs" style={{ fontFamily: BODY_FONT, color: theme.textMuted }}>
-                    <span>Entradas <b style={{ color: theme.mint }}>{formatCurrency(entradaResumo)}</b></span>
-                    <span>Saídas <b style={{ color: theme.coral }}>{formatCurrency(saidaResumo)}</b></span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {mesesComLancamentos.length > 1 && (
-            <button
-              onClick={() => setVerTodosResumo((v) => !v)}
-              className="text-xs font-semibold mt-2"
-              style={{ color: theme.mint, fontFamily: BODY_FONT, minHeight: 32 }}
-            >
-              {verTodosResumo ? "Ver menos" : `Ver mais (${mesesComLancamentos.length - 1})`}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2">
-        {mesesOrdenados.map((mesKey) => {
-          const itensReais = porMes[mesKey] || [];
-          const pendentesDoMes = pendenciasPorMes[mesKey] || [];
-          const itens = [...itensReais, ...pendentesDoMes].sort((a, b) => (a.data < b.data ? 1 : -1));
-          const totalEntrada = itensReais.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
-          const totalSaida = itensReais.filter((l) => l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0);
-          const saldo = totalEntrada - totalSaida;
-          const aberto = expandido === mesKey;
-          return (
-            <div key={mesKey} className="rounded-2xl overflow-hidden" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-              <button
-                className="w-full flex items-center justify-between px-4 py-3 text-left"
-                onClick={() => setExpandido(aberto ? null : mesKey)}
-              >
-                <div>
-                  <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: theme.text }}>
-                    {mesKey === "sem-data" ? "Sem data" : monthLabel(mesKey)}
-                  </div>
-                  <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                    {itensReais.length} lançamento{itensReais.length === 1 ? "" : "s"}
-                    {pendentesDoMes.length > 0 && (
-                      <span style={{ color: theme.amber }}> · {pendentesDoMes.length} previsto{pendentesDoMes.length === 1 ? "" : "s"}</span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span style={{ color: saldo >= 0 ? theme.mint : theme.coral, fontFamily: HEAD_FONT, fontSize: 15 }}>
-                    {formatCurrency(saldo)}
+          {/* FAIXA DO MÊS — entrou, saiu e o saldo, só do mês que está na tela */}
+          <div
+            className="mbr-caixa-resumo"
+            style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16 }}
+          >
+            {[
+              { rotulo: "Entrou", valor: entradaDoMes, cor: "var(--rd-positive)", Icone: TrendingUp },
+              { rotulo: "Saiu", valor: saidaDoMes, cor: "var(--rd-negative)", Icone: TrendingDown },
+              { rotulo: "Saldo do mês", valor: saldoDoMes, cor: saldoDoMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)", Icone: null },
+            ].map(({ rotulo, valor, cor, Icone }) => (
+              <div key={rotulo} className="flex items-center" style={{ gap: 12 }}>
+                {Icone && (
+                  <span
+                    className="flex items-center justify-center flex-none"
+                    style={{ width: 30, height: 30, borderRadius: 9, background: "var(--rd-surface-2)" }}
+                  >
+                    <Icone size={15} color={cor} />
                   </span>
-                  {aberto ? <ChevronUp size={18} color={theme.textMuted} /> : <ChevronDown size={18} color={theme.textMuted} />}
-                </div>
-              </button>
+                )}
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--rd-text-faint)" }}>
+                  {rotulo}
+                </span>
+                <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.03em", color: cor, marginLeft: "auto" }}>
+                  {formatCurrency(valor)}
+                </span>
+              </div>
+            ))}
+          </div>
 
-              <Collapse open={aberto}>
-                <div style={{ borderTop: `1px solid ${theme.divider}` }}>
-                  {agruparLancamentos(itens).map((g, gi, arr) =>
-                    g.itens.length === 1 ? (
-                      <LinhaLancamento key={g.chave} l={g.itens[0]} ultimo={gi === arr.length - 1} />
-                    ) : (
-                      <GrupoLancamentos key={g.chave} grupo={g} ultimo={gi === arr.length - 1} />
-                    )
+          <div className="mbr-detalhe-grid">
+            {/* ---------- LISTA ---------- */}
+            <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+              <div
+                className="mbr-cresce"
+                style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
+              >
+                <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s4)" }}>
+                  <span style={RD_LABEL}>Lançamentos</span>
+                  <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+                    <div className="mbr-filtros" style={{ minWidth: 0 }}>
+                      {[
+                        { id: "tudo", label: "Tudo" },
+                        { id: "entrada", label: "Entradas" },
+                        { id: "saida", label: "Saídas" },
+                      ].map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => setFiltroTipo(f.id)}
+                          style={{
+                            padding: "5px 12px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: filtroTipo === f.id ? 700 : 600,
+                            background: filtroTipo === f.id ? "var(--rd-brand)" : "transparent",
+                            color: filtroTipo === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative" style={{ flex: "1 1 170px", minWidth: 150 }}>
+                      <Search size={13} strokeWidth={2.75} style={{ position: "absolute", left: 12, top: 9, color: "var(--rd-text-faint)" }} />
+                      <input
+                        value={busca}
+                        onChange={(e) => setBusca(e.target.value)}
+                        placeholder="Buscar ou filtrar por placa"
+                        style={{
+                          width: "100%",
+                          background: "var(--rd-surface-2)",
+                          border: "1px solid var(--rd-border)",
+                          borderRadius: 999,
+                          padding: "7px 12px 7px 32px",
+                          color: "var(--rd-text)",
+                          fontSize: 12,
+                          fontFamily: "var(--rd-font)" }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mbr-lista-rolante">
+                  {gruposDoMes.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)", paddingBottom: 6 }}>
+                      {busca || filtroTipo !== "tudo" ? "Nada com esse filtro." : `Nenhum lançamento em ${monthLabel(mesVisivel)}.`}
+                    </div>
+                  ) : (
+                    gruposDoMes.map((g) => <LinhaCaixa key={g.chave} grupo={g} />)
                   )}
                 </div>
-              </Collapse>
+
+                <div className="flex items-center justify-between flex-wrap mbr-rodape-baixo" style={{ gap: 10, borderTop: "1px solid var(--rd-border)" }}>
+                  <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                    {itensFiltrados.length} lançamento{itensFiltrados.length === 1 ? "" : "s"}
+                  </span>
+                  <span className="flex items-center" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Total</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 700, color: somaVisivel >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                      {formatCurrency(somaVisivel)}
+                    </span>
+                  </span>
+                </div>
+              </div>
             </div>
-          );
-        })}
-      </div>
+
+            {/* ---------- COLUNA DA DIREITA ---------- */}
+            <div className="flex flex-col" style={{ gap: "var(--rd-s5)", minWidth: 0, height: "100%" }}>
+              {/* minHeight fixo: são 4 classificações possíveis no app, então o cartão tem
+                  sempre a mesma altura — sem isso um mês com 2 tipos de gasto e outro com
+                  4 deixavam a coluna (e o vão embaixo da lista) de tamanhos diferentes.
+                  220 é o suficiente pras 4 linhas (rótulo + valor + barrinha) caberem
+                  inteiras, sem cortar a última — o resto da coluna (Últimos 6 meses,
+                  Atalhos, Ainda neste mês) só empilha embaixo, então a lista da esquerda
+                  (que estica sozinha) sempre termina na mesma linha que esses cartões */}
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)", minHeight: 220 }}>
+                <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Para onde foi</div>
+                {paraOndeFoi.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--rd-text-muted)" }}>Nenhuma saída em {monthLabel(mesVisivel)}.</div>
+                ) : (
+                  paraOndeFoi.map((c, i) => (
+                    <div key={c.nome} style={{ marginBottom: i === paraOndeFoi.length - 1 ? 0 : "var(--rd-s4)" }}>
+                      <div className="flex items-center justify-between" style={{ gap: 10, marginBottom: 6 }}>
+                        <span className="truncate" style={{ fontSize: 13, color: "var(--rd-text)" }}>{c.nome}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)", whiteSpace: "nowrap" }}>{formatCurrency(c.valor)}</span>
+                      </div>
+                      <div style={{ height: 4, borderRadius: 999, background: "var(--rd-surface-2)" }}>
+                        <div style={{ width: `${c.pct}%`, height: "100%", borderRadius: 999, background: c.cor }} />
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                <div className="flex items-baseline justify-between flex-wrap" style={{ gap: 10, marginBottom: "var(--rd-s4)" }}>
+                  <span style={RD_LABEL}>Últimos 6 meses</span>
+                  <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+                    média <b style={{ color: mediaSeis >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>{formatCurrencyCurto(mediaSeis)}</b>
+                  </span>
+                </div>
+                <div className="flex items-end" style={{ gap: 8, height: 92 }}>
+                  {seisMeses.map((m) => (
+                    <button
+                      key={m.key}
+                      onClick={() => setMesVisivel(m.key)}
+                      title={`${monthLabel(m.key)} · ${formatCurrency(m.saldo)}`}
+                      className="flex flex-col items-center"
+                      style={{ flex: 1, gap: 6, background: "none", minWidth: 0 }}
+                    >
+                      <span
+                        style={{
+                          width: "100%",
+                          height: Math.max(6, (Math.abs(m.saldo) / maxSeis) * 66),
+                          borderRadius: 7,
+                          background: m.saldo >= 0 ? "var(--rd-brand-light)" : "var(--rd-negative)",
+                          opacity: m.key === mesVisivel ? 1 : 0.62 }}
+                      />
+                      <span style={{ fontSize: 10.5, color: m.key === mesVisivel ? "var(--rd-text)" : "var(--rd-text-faint)", fontWeight: m.key === mesVisivel ? 700 : 500 }}>
+                        {m.rotulo}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {permissoes.podeEditar && (
+                <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                  <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Atalhos</div>
+                  <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+                    {[
+                      { label: "+ Receber mensalidade", base: { tipo: "entrada", natureza: "Operacional", categoria: "Mensalidade" }, destaque: true },
+                      { label: "Lançar manutenção", base: { tipo: "saida", natureza: "Manutenção", categoria: "" } },
+                      { label: "Pagar comissão", base: { tipo: "saida", natureza: "Operacional", categoria: "Comissão" } },
+                      { label: "Lançar combustível", base: { tipo: "saida", natureza: "Operacional", categoria: "Combustível" } },
+                      { label: "Pagar despachante", base: { tipo: "saida", natureza: "Expansão", categoria: "Despachante" } },
+                    ].map((a) => (
+                      <button
+                        key={a.label}
+                        onClick={() => setModal({ ...emptyLancamento(), ...a.base })}
+                        style={{
+                          fontSize: 12.5,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          padding: "9px 15px",
+                          background: a.destaque ? "var(--rd-brand)" : "var(--rd-surface-2)",
+                          border: `1px solid ${a.destaque ? "var(--rd-brand)" : "var(--rd-border)"}`,
+                          color: a.destaque ? "var(--rd-brand-light)" : "var(--rd-text-muted)" }}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* fecha a coluna: o que já aconteceu está na lista, o que ainda falta
+                  neste mês está aqui — e o botão leva pra aba onde se resolve */}
+              <div
+                className="mbr-cresce"
+                style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}
+              >
+                <div style={{ ...RD_LABEL, marginBottom: "var(--rd-s4)" }}>Ainda neste mês</div>
+                <div className="flex flex-col" style={{ gap: 9 }}>
+                  <LinhaLegendaValor cor="var(--rd-positive)" rotulo={`A receber · ${faltaNoMes.qtdReceber}`} valor={formatCurrency(faltaNoMes.aReceber)} />
+                  <LinhaLegendaValor cor="var(--rd-negative)" rotulo={`A pagar · ${faltaNoMes.qtdPagar}`} valor={formatCurrency(faltaNoMes.aPagar)} />
+                </div>
+                <div
+                  className="flex items-center justify-between flex-wrap"
+                  style={{ gap: 10, marginTop: "var(--rd-s4)", paddingTop: "var(--rd-s3)", borderTop: "1px solid var(--rd-border)" }}
+                >
+                  <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Saldo previsto</span>
+                  <span
+                    style={{
+                      fontSize: 13.5,
+                      fontWeight: 700,
+                      color: faltaNoMes.aReceber - faltaNoMes.aPagar >= 0 ? "var(--rd-text)" : "var(--rd-negative)" }}
+                  >
+                    {formatCurrency(faltaNoMes.aReceber - faltaNoMes.aPagar)}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setView("futuros")}
+                  className="flex items-center"
+                  style={{ gap: 5, marginTop: "var(--rd-s3)", fontSize: 12, fontWeight: 700, color: "var(--rd-brand-light)" }}
+                >
+                  Ver em Agendamentos <ChevronRight size={13} strokeWidth={2.75} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* lançamentos sem data não pertencem a mês nenhum — ficam num bloco à parte
+              em vez de sumir da tela */}
+          {(porMes["sem-data"] || []).length > 0 && (
+            <div className="flex flex-col" style={{ gap: 10 }}>
+              <span style={RD_LABEL}>Sem data</span>
+              <div style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "var(--rd-s5)" }}>
+                {agruparLancamentos(porMes["sem-data"]).map((g) => (
+                  <LinhaCaixa key={g.chave} grupo={g} />
+                ))}
+              </div>
+            </div>
+          )}
 
       {modal && (
         <LancamentoModal
@@ -4597,6 +6422,48 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
         />
       )}
         </>
+      )}
+
+
+      {/* barra de desfazer — acima da barra de navegação, some sozinha em 15s. Vai por
+          portal no body porque tem ancestral com transform (as animações de entrada dos
+          cartões), e transform faz position:fixed grudar no ancestral em vez da tela */}
+      {desfazer && createPortal(
+        <div
+          className="fixed left-0 right-0 flex justify-center px-4 mbr-fade-in"
+          style={{ bottom: 92, zIndex: 120, pointerEvents: "none" }}
+        >
+          <div
+            className="flex items-center gap-3 rounded-2xl px-4 py-3 w-full"
+            style={{
+              maxWidth: 460,
+              background: "var(--rd-surface)",
+              border: "1px solid var(--rd-border)",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+              pointerEvents: "auto",
+            }}
+          >
+            <div className="flex-1 min-w-0">
+              <div style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>Excluído</div>
+              <div className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text)", fontWeight: 700 }}>{desfazer.rotulo}</div>
+            </div>
+            <button
+              onClick={restaurar}
+              className="rounded-xl px-3 py-2 flex-shrink-0"
+              style={{ background: "var(--rd-brand-soft)", color: "var(--rd-shell)", fontSize: 12.5, fontWeight: 700 }}
+            >
+              Desfazer
+            </button>
+            <button
+              onClick={() => setDesfazer(null)}
+              className="flex items-center justify-center flex-shrink-0"
+              style={{ color: "var(--rd-text-dim)", width: 32, height: 32, marginRight: -6, background: "none" }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -4633,8 +6500,7 @@ function Reveal({ children, delay = 0 }) {
       style={{
         opacity: visible ? 1 : 0,
         transform: visible ? "translateY(0)" : "translateY(26px)",
-        transition: `opacity 0.55s ease ${delay}ms, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) ${delay}ms`,
-      }}
+        transition: `opacity 0.55s ease ${delay}ms, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) ${delay}ms` }}
     >
       {children}
     </div>
@@ -4721,8 +6587,7 @@ function TooltipSemDuplicata({ active, payload, label, formatter }) {
         borderRadius: 12,
         padding: "8px 12px",
         fontFamily: BODY_FONT,
-        fontSize: 12,
-      }}
+        fontSize: 12 }}
     >
       {label !== undefined && label !== null && (
         <div style={{ color: theme.text, fontWeight: 700, marginBottom: 4 }}>{label}</div>
@@ -4806,16 +6671,14 @@ function HeroStat({ label, value, format = formatCurrency, icon: Icon, accent, d
       className={`relative rounded-2xl mbr-card-lift${fill ? " h-full" : ""}${temDetalhes ? " cursor-pointer" : ""}`}
       style={{
         background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`,
-        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${accent}1F`,
-      }}
+        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${accent}1F` }}
       onMouseEnter={temDetalhes ? () => setHover(true) : undefined}
       onMouseLeave={temDetalhes ? () => setHover(false) : undefined}
       onClick={temDetalhes ? () => setFixado((v) => !v) : undefined}
     >
       <div
         className={`relative p-5 flex flex-col gap-2 min-w-0${fill ? " h-full" : ""}`}
-        style={{
-        }}
+        style={{}}
       >
         <div className="flex items-center justify-between gap-2 min-w-0">
           <span className="text-xs uppercase tracking-wide flex items-center gap-1 min-w-0" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
@@ -4856,8 +6719,7 @@ function HeroStat({ label, value, format = formatCurrency, icon: Icon, accent, d
             wordBreak: "normal",
             overflowWrap: "normal",
             whiteSpace: "normal",
-            fontVariantNumeric: "tabular-nums",
-          }}
+            fontVariantNumeric: "tabular-nums" }}
         >
           <CountUp value={value} format={(v) => (format ? format(v) : Math.round(v)).toString().replace(/ /g, " ")} />
         </span>
@@ -4917,8 +6779,7 @@ function HeroStat({ label, value, format = formatCurrency, icon: Icon, accent, d
               zIndex: 100,
               background: theme.panel,
               border: `1px solid ${theme.cardBorder}`,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-            }}
+              boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
             // clicar dentro do cartão de detalhes não deve fechar ele (o listener de
             // "tocar fora" só olha pra fora do card inteiro, isso aqui é redundante mas
             // evita o próprio clique de abrir/fechar do card pai disparar de novo
@@ -4974,8 +6835,7 @@ function AnelCometa({ cx, cy, r, clamped, color }) {
         style={{
           "--mbr-anel-fim": `${anguloFimDeg}deg`,
           transformBox: "view-box",
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
+          transformOrigin: `${cx}px ${cy}px` }}
       >
         {/* halo maior e mais claro por baixo + pontinho mais forte por cima — deixa o
             "cometa" bem mais visível do que um pontinho sozinho */}
@@ -5037,22 +6897,189 @@ function RadialStat({ label, percent, color, sublabel, bare }) {
       className="relative rounded-2xl p-5 flex items-center gap-3 min-w-0 mbr-card-lift"
       style={{
         background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`,
-        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${color}1F`,
-      }}
+        boxShadow: semDestaque ? "0 2px 12px rgba(0,0,0,0.22)" : `0 2px 12px rgba(0,0,0,0.22), 0 0 28px ${color}1F` }}
     >
       {conteudo}
     </div>
   );
 }
 
-function DashboardView({ motos, lancamentos, clientes, futuros }) {
+/* ===========================================================
+   REDESIGN — átomos da Visão geral nova (Etapa 3)
+=========================================================== */
+const RD_LABEL = { fontSize: 11.5, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--rd-brand-soft)" };
+
+
+// uma linha de "conta do mês": data curta, nome e valor com sinal. Usada no cartão
+// "Este mês" e no painel que abre em cima quando a lista é grande demais pro cartão
+function LinhaConta({ item }) {
+  return (
+    <div className="flex items-center" style={{ gap: 10, paddingTop: 4 }}>
+      <span style={{ fontSize: 11, color: "var(--rd-text-faint)", flex: "none", width: 34 }}>
+        {(item.data || "").slice(8, 10)}/{(item.data || "").slice(5, 7)}
+      </span>
+      <span className="truncate" style={{ fontSize: 12.5, flex: 1, color: "var(--rd-text)" }}>
+        {item.label}
+      </span>
+      <span style={{ fontSize: 12.5, fontWeight: 700, flex: "none", color: item.sinal > 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+        {item.sinal > 0 ? "+ " : "− "}
+        {item.valorFmt}
+      </span>
+    </div>
+  );
+}
+
+function ValorPequeno({ label, valor, cor = "var(--rd-text)" }) {
+  return (
+    <div className="flex flex-col" style={{ gap: 1 }}>
+      <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>{label}</span>
+      <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: cor }}>{valor}</span>
+    </div>
+  );
+}
+
+// gráfico de entradas/saídas/lucro em segmentos retos (sem depender de biblioteca de
+// gráfico) — a mesma ideia visual do mockup (área embaixo das entradas, linha tracejada
+// pro lucro), só que sempre correto pro número de meses que o período selecionado tiver
+// Gráfico do caixa mês a mês. Três linhas (o que entrou, o que saiu e a sobra) sobre a
+// mesma escala, pra dar de bater o olho e ver se o mês fechou pra cima ou pra baixo.
+// Ele é TOCÁVEL: passar o mouse (ou arrastar o dedo) escolhe um mês, e os números desse
+// mês aparecem escritos acima do desenho — antes o gráfico não dizia nada ao ser clicado
+// e não tinha nem o nome dos meses embaixo, então não dava pra saber o que estava vendo.
+// O mês escolhido no gráfico é controlado de fora (iAtivo/onAtivo): é a legenda do
+// cartão, e não o gráfico, que mostra os valores — clicar aqui muda os números de lá
+// uma linha da legenda de valores: bolinha + rótulo + número. Com "itens", o número
+// abre o detalhamento (o que compôs aquele total) — é o "clico e vejo os gastos"
+function LegendaPonto({ cor, label, valor, itens, fmt }) {
+  const numero = <span style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)" }}>{valor}</span>;
+  return (
+    <div className="flex items-center" style={{ gap: 8, whiteSpace: "nowrap" }}>
+      <span style={{ width: 8, height: 8, borderRadius: 999, background: cor, flex: "none" }} />
+      <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>{label}</span>
+      {itens && itens.length > 0 ? (
+        <ValorComDetalhe itens={itens} fmt={fmt}>
+          {numero}
+        </ValorComDetalhe>
+      ) : (
+        numero
+      )}
+    </div>
+  );
+}
+
+function GraficoCaixa({ data, altura = 82, iAtivo, onAtivo, rodape }) {
+  const w = 640;
+  const h = altura;
+  const setIAtivo = onAtivo || (() => {});
+  if (!data.length) return <div style={{ height: h }} />;
+
+  const vals = data.flatMap((d) => [d.Entradas, d.Saídas, d.Lucro]);
+  const maxVal = Math.max(1, ...vals);
+  const minVal = Math.min(0, ...vals);
+  const range = Math.max(1, maxVal - minVal);
+  const y = (v) => h - 10 - ((v - minVal) / range) * (h - 20);
+  const x = (i) => (data.length > 1 ? (i * w) / (data.length - 1) : w / 2);
+  const pathFor = (key) => data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)} ${y(d[key]).toFixed(1)}`).join(" ");
+  const areaEntradas = `${pathFor("Entradas")} L${x(data.length - 1).toFixed(1)} ${h} L${x(0).toFixed(1)} ${h} Z`;
+
+  // sem nada escolhido, mostra o mês mais recente — o gráfico nunca fica "mudo"
+  const iMostrado = iAtivo ?? data.length - 1;
+  const doMes = data[iMostrado];
+
+  const escolherPorPosicao = (clientX, alvo) => {
+    const r = alvo.getBoundingClientRect();
+    if (!r.width) return;
+    const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    setIAtivo(Math.round(frac * (data.length - 1)));
+  };
+
+  const linhas = [
+    { key: "Entradas", rotulo: "Entradas", cor: "var(--rd-positive)" },
+    { key: "Saídas", rotulo: "Saídas", cor: "var(--rd-negative)" },
+    { key: "Lucro", rotulo: "Lucro", cor: "var(--rd-attention)" },
+  ];
+
+  return (
+    <div className="flex flex-col" style={{ gap: 8 }}>
+      {/* clicar também escolhe o mês, não só passar o mouse: no iPad/desktop a pessoa
+          clica no gráfico esperando "travar" naquele mês */}
+      <div
+        style={{ position: "relative", cursor: "crosshair", touchAction: "pan-y" }}
+        onMouseMove={(e) => escolherPorPosicao(e.clientX, e.currentTarget)}
+        onMouseLeave={() => setIAtivo(null)}
+        onClick={(e) => escolherPorPosicao(e.clientX, e.currentTarget)}
+        onTouchStart={(e) => escolherPorPosicao(e.touches[0].clientX, e.currentTarget)}
+        onTouchMove={(e) => escolherPorPosicao(e.touches[0].clientX, e.currentTarget)}
+      >
+        <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block" }}>
+          <line x1="0" y1={y(0)} x2={w} y2={y(0)} stroke="var(--rd-border)" strokeWidth="1" />
+          <path d={areaEntradas} fill="var(--rd-positive)" opacity="0.07" />
+          <path d={pathFor("Entradas")} fill="none" stroke="var(--rd-positive)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={pathFor("Saídas")} fill="none" stroke="var(--rd-negative)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+          <path d={pathFor("Lucro")} fill="none" stroke="var(--rd-attention)" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round" strokeLinejoin="round" />
+          {/* guia vertical + bolinhas no mês escolhido. vectorEffect impede que o
+              preserveAspectRatio="none" estique a espessura do traço e da bolinha */}
+          <line x1={x(iMostrado)} y1="0" x2={x(iMostrado)} y2={h} stroke="var(--rd-text-faint)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+          {linhas.map((l) => (
+            <circle
+              key={l.key}
+              cx={x(iMostrado)}
+              cy={y(doMes[l.key])}
+              r="3.5"
+              fill="var(--rd-surface)"
+              stroke={l.cor}
+              strokeWidth="2"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+        </svg>
+      </div>
+
+      {/* nome dos meses embaixo — em HTML, não dentro do SVG, senão o
+          preserveAspectRatio="none" distorceria as letras horizontalmente */}
+      <div className="flex" style={{ justifyContent: "space-between", fontSize: 10.5, color: "var(--rd-text-faint)" }}>
+        {data.map((d, i) => (
+          <span
+            key={d.mes}
+            style={{
+              flex: "1 1 0",
+              textAlign: i === 0 ? "left" : i === data.length - 1 ? "right" : "center",
+              fontWeight: i === iMostrado ? 700 : 500,
+              color: i === iMostrado ? "var(--rd-text-muted)" : "var(--rd-text-faint)" }}
+          >
+            {d.mes}
+          </span>
+        ))}
+      </div>
+
+      {/* legenda do gráfico: só diz qual linha é qual. Os valores ficam na legenda do
+          cartão, que acompanha o mês escolhido aqui */}
+      <div className="flex items-center flex-wrap" style={{ gap: 14 }}>
+        {linhas.map((l) => (
+          <span key={l.key} className="flex items-center" style={{ gap: 6, fontSize: 11.5, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>
+            <span style={{ width: 14, height: 2, borderRadius: 2, background: l.cor, flex: "none" }} />
+            {l.rotulo}
+          </span>
+        ))}
+        {rodape && <span style={{ marginLeft: "auto" }}>{rodape}</span>}
+      </div>
+    </div>
+  );
+}
+
+function DashboardView({ motos, lancamentos, clientes, futuros, config, onIrPara }) {
   const alugadas = motos.filter((m) => m.status === "alugada").length;
   const disponiveis = motos.filter((m) => m.status === "disponivel").length;
   const motosVencidas = motos.filter((m) => m.status === "alugada" && isContratoVencido(m.contratoAtual, pagamentosDaMoto(m, lancamentos)));
   const vencidas = motosVencidas.length;
-  // um cliente com pagamento atrasado = uma moto alugada vencida (é 1 pra 1, pelo
-  // contratoAtual) — daí a taxa de inadimplência ser sobre o total de clientes
-  const taxaInadimplencia = clientes.length > 0 ? (vencidas / clientes.length) * 100 : 0;
+  const nomesClientesVencidos = motosVencidas
+    .map((m) => clientes.find((c) => c.id === m.contratoAtual?.clienteId)?.nome)
+    .filter(Boolean);
+
+  // clientes sem nenhuma moto com contrato ativo — a "fila de espera". Não existe campo
+  // de data de cadastro no modelo de cliente, então a ordem é a mesma em que já vêm na
+  // lista (não dá pra ordenar por "mais antigo" sem inventar um campo que não existe)
+  const clientesSemContrato = clientes.filter((c) => !motos.some((m) => m.contratoAtual?.clienteId === c.id));
 
   // motos disponíveis e há quanto tempo — usa o fim do último contrato encerrado como
   // "desde quando" está parada; se nunca teve contrato, usa a data de compra
@@ -5076,15 +7103,14 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
   const mesesComDados = new Set(
     [...lancamentos.map((l) => l.data?.slice(0, 7)), ...todasManutencoes.map((m) => m.data?.slice(0, 7))].filter(Boolean)
   );
-  // usa o mês atual se ele já tiver algum lançamento; senão, cai pro mês mais recente com dados
-  // (evita mostrar "Lucro do mês" zerado só porque ainda não lançou nada no mês corrente) —
-  // mas o usuário pode escolher outro mês pra olhar pelo seletor no topo da tela
+  // usa o mês atual se ele já tiver algum lançamento; senão, cai pro mês mais recente com
+  // dados (evita mostrar o mês zerado só porque ainda não lançou nada no mês corrente) —
+  // mas dá pra andar pra trás/frente no seletor do cartão de Caixa
   const mesAutoDetectado = mesesComDados.has(mesCalendario) ? mesCalendario : [...mesesComDados].sort().pop() || mesCalendario;
   const [mesEscolhido, setMesEscolhido] = useState(null);
   const mesRef = mesEscolhido || mesAutoDetectado;
-  // o botão "Atual" precisa encolher de volta ao ser clicado, não só sumir na hora — por
-  // isso continua montado mais um instante enquanto a animação de saída (largura pra 0)
-  // termina, só desmonta de fato depois
+  // o botão "Atual" encolhe de volta ao ser clicado em vez de sumir na hora — por isso
+  // continua montado mais um instante, até a animação de saída terminar
   const [botaoAtualMontado, setBotaoAtualMontado] = useState(!!mesEscolhido);
   useEffect(() => {
     if (mesEscolhido) {
@@ -5096,13 +7122,13 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
   }, [mesEscolhido]);
   const podeAvancarMes = mesRef < mesCalendario;
   const [direcaoMes, setDirecaoMes] = useState(0); // -1 = voltou, 1 = avançou
-  const irParaMesAnteriorRef = () => {
+  const irParaMesAnterior = () => {
     setDirecaoMes(-1);
     const [ano, mesN] = mesRef.split("-").map(Number);
     const d = new Date(ano, mesN - 2, 1);
     setMesEscolhido(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
-  const irParaProximoMesRef = () => {
+  const irParaProximoMes = () => {
     if (!podeAvancarMes) return;
     setDirecaoMes(1);
     const [ano, mesN] = mesRef.split("-").map(Number);
@@ -5111,6 +7137,14 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
   };
   const noMes = (data) => data?.slice(0, 7) === mesRef;
   const rotuloMes = monthLabel(mesRef);
+  // "Caixa de setembro" — o mês por extenso no título do cartão, em vez de "Caixa de"
+  // solto com o seletor logo em seguida
+  const nomeDoMesRef = (() => {
+    const [ano, mesN] = mesRef.split("-").map(Number);
+    const nome = new Date(ano, mesN - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
+    const doAnoAtual = ano === new Date().getFullYear();
+    return doAnoAtual ? nome : `${nome} de ${ano}`;
+  })();
 
   const entradasMes = lancamentos.filter((l) => l.tipo === "entrada" && noMes(l.data)).reduce((s, l) => s + Number(l.valor), 0);
   const saidasOperacionaisMes = lancamentos
@@ -5120,17 +7154,11 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
   const saidasMes = saidasOperacionaisMes + manutencaoMes;
   const lucroMes = entradasMes - saidasMes;
   const margemLucro = entradasMes > 0 ? (lucroMes / entradasMes) * 100 : 0;
-  // "Lucro operacional" ignora investimento/expansão de propósito (compra de moto nova,
-  // por exemplo) — é o quanto o negócio rendeu operando no mês. "Saldo de caixa" é o que
-  // de fato entrou e saiu da conta, incluindo esses investimentos — os dois às vezes
-  // dão número bem diferente no mesmo mês (comprou moto = saldo de caixa negativo, mas
-  // lucro operacional pode continuar positivo), por isso mostrar os dois lado a lado
   const investimentosMes = lancamentos.filter((l) => l.tipo === "saida" && l.natureza === "Expansão" && noMes(l.data)).reduce((s, l) => s + Number(l.valor), 0);
-  const saldoCaixaMes = lucroMes - investimentosMes;
 
-  // detalhamento pro cartão que abre no hover/toque do Faturamento e do Lucro — agrupa
-  // por categoria (entradas) / natureza (saídas) em vez de listar lançamento por
-  // lançamento, senão um mês com muitos lançamentos ficaria com uma lista enorme
+  // detalhamento que abre ao tocar/passar o mouse nos valores do cartão de Caixa —
+  // agrupa por categoria (entradas) e por natureza (saídas) em vez de listar lançamento
+  // por lançamento, senão um mês movimentado viraria uma lista sem fim
   const agruparPorChave = (lista, chaveFn, valorFn) => {
     const porChave = new Map();
     lista.forEach((item) => {
@@ -5139,37 +7167,27 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
     });
     return [...porChave.entries()].sort((a, b) => b[1] - a[1]);
   };
-  const detalhesFaturamento = agruparPorChave(
+  const detalhesEntradas = agruparPorChave(
     lancamentos.filter((l) => l.tipo === "entrada" && noMes(l.data)),
     (l) => l.categoria,
     (l) => l.valor
-  ).map(([label, valor]) => ({ label, valor, cor: theme.mint }));
-  const detalhesLucro = (() => {
-    const itens = [{ label: "Entradas", valor: entradasMes, cor: theme.mint }];
-    agruparPorChave(
+  ).map(([label, total]) => ({ label, total, cor: "var(--rd-positive)" }));
+  const detalhesSaidas = (() => {
+    const itens = agruparPorChave(
       lancamentos.filter((l) => l.tipo === "saida" && l.natureza !== "Expansão" && noMes(l.data)),
       (l) => l.natureza,
       (l) => l.valor
-    ).forEach(([natureza, valor]) => itens.push({ label: natureza, valor: -valor, cor: theme.coral }));
-    if (manutencaoMes > 0) itens.push({ label: "Manutenção", valor: -manutencaoMes, cor: theme.coral });
-    itens.push({ label: lucroMes >= 0 ? "Lucro" : "Prejuízo", valor: lucroMes, cor: lucroMes >= 0 ? theme.mint : theme.coral });
+    ).map(([label, total]) => ({ label, total, cor: "var(--rd-negative)" }));
+    if (manutencaoMes > 0) itens.push({ label: "Manutenção", total: manutencaoMes, cor: "var(--rd-negative)" });
+    if (investimentosMes > 0) itens.push({ label: "Expansão/investimento", total: investimentosMes, cor: "var(--rd-attention)" });
     return itens;
   })();
-  // mesmo detalhamento do Lucro, só que incluindo Expansão/investimento na conta (é
-  // exatamente essa diferença que faz Saldo de caixa e Lucro operacional às vezes darem
-  // números bem diferentes no mesmo mês)
-  const detalhesSaldo = (() => {
-    const itens = [{ label: "Entradas", valor: entradasMes, cor: theme.mint }];
-    agruparPorChave(
-      lancamentos.filter((l) => l.tipo === "saida" && l.natureza !== "Expansão" && noMes(l.data)),
-      (l) => l.natureza,
-      (l) => l.valor
-    ).forEach(([natureza, valor]) => itens.push({ label: natureza, valor: -valor, cor: theme.coral }));
-    if (manutencaoMes > 0) itens.push({ label: "Manutenção", valor: -manutencaoMes, cor: theme.coral });
-    if (investimentosMes > 0) itens.push({ label: "Expansão/investimento", valor: -investimentosMes, cor: theme.coral });
-    itens.push({ label: saldoCaixaMes >= 0 ? "Saldo de caixa" : "Déficit de caixa", valor: saldoCaixaMes, cor: saldoCaixaMes >= 0 ? theme.mint : theme.coral });
-    return itens;
-  })();
+  // composição do resultado: o que entrou, cada grupo do que saiu, e a sobra no fim
+  const detalhesResultado = [
+    { label: "Entrou", total: entradasMes, cor: "var(--rd-positive)" },
+    ...detalhesSaidas.filter((d) => d.label !== "Expansão/investimento").map((d) => ({ ...d, total: -d.total })),
+    { label: lucroMes >= 0 ? "Sobrou" : "Faltou", total: lucroMes, cor: lucroMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" },
+  ];
 
   const [refAno, refMesNum] = mesRef.split("-").map(Number);
 
@@ -5181,49 +7199,21 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
   const fimAbs = refAno * 12 + (refMesNum - 1);
   const mesesDisponiveis = fimAbs - inicioAbs + 1;
 
-  const [periodoGrafico, setPeriodoGrafico] = useState("tudo"); // "3m" | "6m" | "12m" | "tudo"
-  const periodoToggleRef = useRef(null);
-  const periodoSlotRefs = useRef({});
-  const [periodoPillRect, setPeriodoPillRect] = useState(null);
-
-  // mesma pílula deslizante do menu de baixo, agora no seletor 3m/6m/12m/Tudo do gráfico
-  useEffect(() => {
-    const medir = () => {
-      const slot = periodoSlotRefs.current[periodoGrafico];
-      const container = periodoToggleRef.current;
-      if (!slot || !container) return;
-      const slotRect = slot.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      setPeriodoPillRect({ left: slotRect.left - containerRect.left, top: slotRect.top - containerRect.top, width: slotRect.width, height: slotRect.height });
-    };
-    medir();
-    window.addEventListener("resize", medir);
-    return () => window.removeEventListener("resize", medir);
-  }, [periodoGrafico]);
-
-  const [mostrarInvestimentos, setMostrarInvestimentos] = useState(false);
-  // ao aparecer, deixa o próprio Recharts desenhar a linha se formando da esquerda pra
-  // direita (a animação padrão dele); ao esconder, como ele não anima a saída, continua
-  // montada mais um instante enquanto a opacidade cai suavemente até zero antes de tirar
-  const [investMontada, setInvestMontada] = useState(false);
-  const [investOpaca, setInvestOpaca] = useState(false);
-  useEffect(() => {
-    if (mostrarInvestimentos) {
-      setInvestMontada(true);
-      setInvestOpaca(true);
-      return;
-    }
-    setInvestOpaca(false);
-    const t = setTimeout(() => setInvestMontada(false), 300);
-    return () => clearTimeout(t);
-  }, [mostrarInvestimentos]);
-  const [verTodasRetorno, setVerTodasRetorno] = useState(false);
   const [valoresOcultos, setValoresOcultos] = useState(false);
   const fmt = valoresOcultos ? () => "R$ ••••••" : formatCurrency;
-  const fmtCompact = valoresOcultos ? () => "•••" : formatCompact;
 
-  const qtdMesesAlvo = { "3m": 3, "6m": 6, "12m": 12, tudo: mesesDisponiveis }[periodoGrafico] || mesesDisponiveis;
-  const qtdMeses = Math.max(1, Math.min(qtdMesesAlvo, mesesDisponiveis));
+  // mês destacado no gráfico (null = o mês de referência, o último da série)
+  const [iMesGrafico, setIMesGrafico] = useState(null);
+  // qual painel sobreposto está aberto: "mes" (contas do mês) ou "7dias"
+  const [painel, setPainel] = useState(null);
+  // quantos rastreadores estão verdes agora — quem informa é o próprio mapa
+  const [resumoRastreio, setResumoRastreio] = useState({ emMovimento: 0, total: 0 });
+
+  // a janela do gráfico é fixa em 6 meses terminando no mês escolhido — o seletor
+  // 3m/6m/12m saiu do cabeçalho: quem manda na tela é o mês, e um controle a mais só
+  // pra mudar o tamanho da janela do gráfico não pagava o espaço que ocupava
+  const JANELA_GRAFICO_MESES = 6;
+  const qtdMeses = Math.max(1, Math.min(JANELA_GRAFICO_MESES, mesesDisponiveis));
 
   const meses = [];
   for (let i = qtdMeses - 1; i >= 0; i--) {
@@ -5237,730 +7227,714 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
     const manut = todasManutencoes.filter((m) => m.data?.slice(0, 7) === key).reduce((s, m) => s + Number(m.valorGasto), 0);
     const entradasDoMes = doMesX.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
     const saidasDoMes = doMesX.filter((l) => l.tipo === "saida" && l.natureza !== "Expansão").reduce((s, l) => s + Number(l.valor), 0) + manut;
-    return {
-      mes: monthLabel(key),
-      Entradas: entradasDoMes,
-      Saídas: saidasDoMes,
-      Investimentos: doMesX.filter((l) => l.tipo === "saida" && l.natureza === "Expansão").reduce((s, l) => s + Number(l.valor), 0),
-      Lucro: entradasDoMes - saidasDoMes,
-    };
+    return { mes: monthLabel(key), Entradas: entradasDoMes, Saídas: saidasDoMes, Lucro: entradasDoMes - saidasDoMes };
   });
 
-  // mini-gráfico de tendência do faturamento — sempre os últimos meses com dados,
-  // independente do filtro (3m/6m/12m/tudo) escolhido pro gráfico principal
-  const sparkMeses = Math.min(6, mesesDisponiveis);
-  const sparkFaturamento = Array.from({ length: sparkMeses }, (_, i) => {
-    const abs = fimAbs - (sparkMeses - 1 - i);
+  // o mês que a legenda do cartão está mostrando — o destacado no gráfico, ou o de
+  // referência quando não há nenhum destacado
+  const iMesLegenda = Math.min(iMesGrafico ?? chartData.length - 1, Math.max(0, chartData.length - 1));
+  const mesDoGrafico = chartData[iMesLegenda] || { mes: rotuloMes, Entradas: 0, Saídas: 0, Lucro: 0 };
+  const mesDoGraficoEhReferencia = iMesLegenda === chartData.length - 1;
+
+  // margem média dos últimos 12 meses — fixa, independente do período escolhido no
+  // seletor do gráfico. Soma entradas/lucro do período (em vez de fazer a média das
+  // porcentagens mês a mês), senão um mês fraco pesaria igual a um mês forte
+  const meses12 = Math.max(1, Math.min(12, mesesDisponiveis));
+  let entradas12m = 0;
+  let lucro12m = 0;
+  for (let i = 0; i < meses12; i++) {
+    const abs = fimAbs - i;
     const ano = Math.floor(abs / 12);
     const mesN = (abs % 12) + 1;
     const key = `${ano}-${String(mesN).padStart(2, "0")}`;
-    const v = lancamentos.filter((l) => l.tipo === "entrada" && l.data?.slice(0, 7) === key).reduce((s, l) => s + Number(l.valor), 0);
-    return { v };
-  });
+    const doMesX = lancamentos.filter((l) => l.data?.slice(0, 7) === key);
+    const manut = todasManutencoes.filter((m) => m.data?.slice(0, 7) === key).reduce((s, m) => s + Number(m.valorGasto), 0);
+    const e = doMesX.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
+    const s = doMesX.filter((l) => l.tipo === "saida" && l.natureza !== "Expansão").reduce((s2, l) => s2 + Number(l.valor), 0) + manut;
+    entradas12m += e;
+    lucro12m += e - s;
+  }
+  const margemMedia12m = entradas12m > 0 ? (lucro12m / entradas12m) * 100 : 0;
 
-  const porNatureza = NATUREZAS.map((n) => ({
-    natureza: n,
-    total: lancamentos.filter((l) => l.tipo === "saida" && l.natureza === n).reduce((s, l) => s + Number(l.valor), 0),
-  }));
-  const maxNatureza = Math.max(1, ...porNatureza.map((n) => n.total));
-
-  const taxaOcupacao = motos.length ? Math.round((alugadas / motos.length) * 100) : 0;
   const contratosAtivos = motos.filter((m) => m.contratoAtual);
-  const faturamentoPrevisto = contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0);
-  const ticketMedio = contratosAtivos.length ? faturamentoPrevisto / contratosAtivos.length : 0;
-  const investimentoFrota = motos.reduce((s, m) => s + Number(m.valorCompra || 0), 0);
+  // só entram os contratos que JÁ podem ser cobrados no mês em questão — um contrato
+  // fechado neste mês só gera cobrança no mês que vem (aluguel é pago no fim do
+  // período), e contar ele aqui inflava o previsto do mês assim que a moto era alugada
+  const contratosCobraveisNoMes = contratosAtivos.filter((m) => contratoCobraNoMes(m.contratoAtual, mesRef));
+  const faturamentoPrevisto = contratosCobraveisNoMes.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0);
+  // o ticket médio é sobre o valor dos contratos ativos (quanto vale um aluguel), não
+  // sobre o que entra neste mês — por isso continua usando todos os ativos
+  const ticketMedio = contratosAtivos.length
+    ? contratosAtivos.reduce((s, m) => s + Number(m.contratoAtual.valorMensal || 0), 0) / contratosAtivos.length
+    : 0;
+  // investimento na frota = o que foi pago pelas motos MAIS o que foi gasto pra colocar
+  // cada uma na rua (despachante, emplacamento, comissão...). Tudo que está em "Custos"
+  // da moto é dinheiro investido nela, não custo de operação do mês.
+  const investimentoFrota = motos.reduce(
+    (s, m) => s + Number(m.valorCompra || 0) + custosDaMoto(m, lancamentos).reduce((t, c) => t + Number(c.valorGasto || 0), 0),
+    0
+  );
 
-  // inclui tanto manutenção cadastrada na própria moto quanto lançada direto no Caixa
-  // (natureza "Manutenção") — só pra exibição do ranking, não entra de novo no lucro
-  const rankingManutencao = motos
-    .map((m) => ({ placa: m.placa, modelo: m.modelo, total: manutencoesDaMoto(m, lancamentos).reduce((s, x) => s + Number(x.valorGasto || 0), 0) }))
-    .filter((m) => m.total > 0)
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 5);
-  const maxManutencao = Math.max(1, ...rankingManutencao.map((m) => m.total));
+  // dia de vencimento mais próximo entre os contratos em dia — usado no cartão de
+  // Cobrança quando não há nada em atraso ("próx. venc. em X dias")
+  const proximoVencimentoDias = (() => {
+    const hoje = new Date();
+    const hojeZero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+    const dias = contratosAtivos
+      .filter((m) => !motosVencidas.includes(m))
+      .map((m) => diaVencimentoDoContrato(m.contratoAtual))
+      .filter(Boolean)
+      .map((dia) => {
+        let venc = new Date(hoje.getFullYear(), hoje.getMonth(), dia);
+        if (venc < hojeZero) venc = new Date(hoje.getFullYear(), hoje.getMonth() + 1, dia);
+        return Math.round((venc - hojeZero) / (1000 * 60 * 60 * 24));
+      });
+    return dias.length ? Math.min(...dias) : null;
+  })();
 
-  const rankingFaturamento = motos
-    .filter((m) => m.contratoAtual)
-    .map((m) => ({ placa: m.placa, total: Number(m.contratoAtual.valorMensal || 0) }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 5);
-  const maxFaturamentoMoto = Math.max(1, ...rankingFaturamento.map((m) => m.total));
-
-  // retorno do investimento por moto — quanto já foi "recuperado" (estimado a partir do
-  // valor mensal do contrato x meses decorridos) vs quanto custou (compra + custos extras + manutenção)
+  // retorno do investimento por moto — quanto já entrou de aluguel vs o que a moto
+  // CUSTOU PRA COMPRAR, e só isso. Somar manutenção e custo extra aqui fazia a meta
+  // andar pra trás: bastava lançar uma troca de óleo pra moto ficar mais longe de se
+  // pagar do que estava ontem. Esses gastos continuam no lucro do mês pelo Caixa —
+  // o payback é a pergunta "já recuperei o dinheiro que pus na moto?"
   const retornoPorMoto = motos
     .map((m) => {
-      const custosExtrasTotal = custosDaMoto(m, lancamentos).reduce((s, c) => s + Number(c.valorGasto || 0), 0);
-      const manutencaoTotal = (m.manutencoes || []).reduce((s, x) => s + Number(x.valorGasto || 0), 0);
-      const investimentoTotal = Number(m.valorCompra || 0) + custosExtrasTotal + manutencaoTotal;
-      const receitaMensal = m.contratoAtual ? Number(m.contratoAtual.valorMensal || 0) : 0;
-
+      const investimentoTotal = Number(m.valorCompra || 0);
       // recebido de verdade — soma os lançamentos de entrada que citam a placa dessa moto
       // (é assim que o fluxo de caixa já é lançado, ex: "Mensalidade URB5I50")
       const recebidoReal = pagamentosDaMoto(m, lancamentos).reduce((s, p) => s + Number(p.valor), 0);
       const restante = Math.max(0, investimentoTotal - recebidoReal);
-      const mesesRestantes = receitaMensal > 0 ? Math.ceil(restante / receitaMensal) : null;
       const percentPago = investimentoTotal > 0 ? Math.min(100, (recebidoReal / investimentoTotal) * 100) : 0;
-
-      return { placa: m.placa, investimentoTotal, recebidoReal, receitaMensal, percentPago, mesesRestantes, jaPagou: restante <= 0 && investimentoTotal > 0 };
+      return { placa: m.placa, status: m.status, investimentoTotal, recebidoReal, restante, percentPago, jaPagou: restante <= 0 && investimentoTotal > 0 };
     })
-    .filter((r) => r.investimentoTotal > 0)
-    .sort((a, b) => b.percentPago - a.percentPago);
+    .filter((r) => r.investimentoTotal > 0);
 
-  // mesma base do retorno por moto, só que ordenada por tempo (quantos meses faltam),
-  // não por porcentagem — a mais perto de se pagar primeiro, sem contrato ativo por
-  // último (não dá pra estimar quando não tem mensalidade rodando)
-  const paybackPorMoto = [...retornoPorMoto].sort((a, b) => {
-    if (a.jaPagou !== b.jaPagou) return a.jaPagou ? -1 : 1;
-    if (a.mesesRestantes == null && b.mesesRestantes == null) return 0;
-    if (a.mesesRestantes == null) return 1;
-    if (b.mesesRestantes == null) return -1;
-    return a.mesesRestantes - b.mesesRestantes;
-  });
+  // mais perto de se pagar primeiro
+  const paybackPorMoto = [...retornoPorMoto].sort((a, b) => b.percentPago - a.percentPago);
 
-  // mês anterior ao mês de referência — usado só pra calcular a variação (%) dos KPIs principais
+  // mês anterior ao mês de referência — usado só pra calcular a variação (%) do faturamento
   const mesAnteriorKey = (() => {
     const d = new Date(refAno, refMesNum - 2, 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   })();
-  const noMesAnterior = (data) => data?.slice(0, 7) === mesAnteriorKey;
-  const entradasMesAnterior = lancamentos.filter((l) => l.tipo === "entrada" && noMesAnterior(l.data)).reduce((s, l) => s + Number(l.valor), 0);
-  const saidasOperacionaisMesAnterior = lancamentos
-    .filter((l) => l.tipo === "saida" && l.natureza !== "Expansão" && noMesAnterior(l.data))
+  const entradasMesAnterior = lancamentos
+    .filter((l) => l.tipo === "entrada" && l.data?.slice(0, 7) === mesAnteriorKey)
     .reduce((s, l) => s + Number(l.valor), 0);
-  const manutencaoMesAnterior = todasManutencoes.filter((m) => noMesAnterior(m.data)).reduce((s, m) => s + Number(m.valorGasto), 0);
-  const lucroMesAnterior = entradasMesAnterior - (saidasOperacionaisMesAnterior + manutencaoMesAnterior);
   const deltaFaturamento = entradasMesAnterior > 0 ? ((entradasMes - entradasMesAnterior) / entradasMesAnterior) * 100 : null;
-  const deltaLucro = lucroMesAnterior !== 0 ? ((lucroMes - lucroMesAnterior) / Math.abs(lucroMesAnterior)) * 100 : null;
   const rotuloMesAnterior = monthLabel(mesAnteriorKey);
 
-  const totalClientes = clientes?.length || 0;
   const faturamentoAcumulado = lancamentos.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
-  // essa KPI é só uma exibição do total gasto em manutenção (moto + Caixa) — não entra
-  // no cálculo de lucro, que usa "todasManutencoes" (só as cadastradas na própria moto)
-  // pra não contar duas vezes o que já é uma saída normal do Caixa
-  const manutencaoAcumulada = motos.reduce((s, m) => s + manutencoesDaMoto(m, lancamentos).reduce((s2, x) => s2 + Number(x.valorGasto || 0), 0), 0);
-  const contratosEncerrados = motos.reduce((s, m) => s + (m.historicoContratos?.length || 0), 0);
+
+  const { itensEntrada: itensEntrada7d, itensSaida: itensSaida7d } = futurosProximosDias(futuros, motos, 7);
+  const { saldoPrevisto12Meses } = totaisFuturos(futuros, motos);
+  const itens7d = [...itensEntrada7d.map((i) => ({ ...i, sinal: 1 })), ...itensSaida7d.map((i) => ({ ...i, sinal: -1 }))]
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 6);
+  // o que ainda falta entrar e sair no mês de referência, com os itens por trás
+  const emAbertoNoMes = pendenciasDoMes(futuros, motos, lancamentos, mesRef);
+
+  const contasDoMes = [
+    ...emAbertoNoMes.aReceber.map((i) => ({ ...i, sinal: 1, valorFmt: fmt(i.valor) })),
+    ...emAbertoNoMes.aPagar.map((i) => ({ ...i, sinal: -1, valorFmt: fmt(i.valor) })),
+  ].sort((a, b) => ((a.data || "") < (b.data || "") ? -1 : 1));
+
+  // "A RECEBER" é sempre a soma dos itens em aberto — a mesma conta do cartão "Este mês"
+  // e da agenda de cobranças. Antes aqui era "previsto dos contratos menos TUDO que
+  // entrou no mês", uma conta agregada: qualquer entrada que não fosse mensalidade
+  // (ou fosse de uma moto sem cobrança no mês) abatia do previsto do mesmo jeito, e o
+  // número saía diferente do das outras duas telas.
+  const aReceberMes = emAbertoNoMes.totalReceber;
+
+  // faixa "PRECISA DE VOCÊ" — ordenado por severidade; Cobrança nunca some (serve de
+  // confirmação quando está tudo em dia)
+  const cardsPendencia = [];
+  if (motosParadas.length > 0) {
+    cardsPendencia.push({
+      key: "paradas",
+      atencao: true,
+      Icon: Clock,
+      titulo: `${motosParadas.length} moto${motosParadas.length === 1 ? "" : "s"} parada${motosParadas.length === 1 ? "" : "s"}`,
+      // a fila de espera anda junto: moto parada + gente esperando é uma coisa só de
+      // resolver, e assim ela não precisa de um cartão próprio nessa faixa
+      sub: [
+        motosParadas.slice(0, 2).map((m) => `${formatPlaca(m.placa)} há ${m.dias} dia${m.dias === 1 ? "" : "s"}`).join(" · "),
+        clientesSemContrato.length > 0 ? `${clientesSemContrato.length} na fila` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      acao: "Alugar",
+      onClick: () => onIrPara?.("motos"),
+    });
+  } else if (clientesSemContrato.length > 0) {
+    // sem moto parada, a fila vira outro assunto: falta moto pra quem quer alugar
+    cardsPendencia.push({
+      key: "fila",
+      atencao: false,
+      Icon: Users,
+      titulo: `${clientesSemContrato.length} cliente${clientesSemContrato.length === 1 ? "" : "s"} na espera`,
+      sub: clientesSemContrato.slice(0, 3).map((c) => c.nome).join(", "),
+      acao: "Ver fila",
+      onClick: () => onIrPara?.("clientes"),
+    });
+  }
+  cardsPendencia.push({
+    key: "7dias",
+    atencao: false,
+    Icon: CalendarClock,
+    titulo: "Próximos 7 dias",
+    sub:
+      itens7d.length === 0
+        ? "Nenhum vencimento pela frente."
+        : itens7d
+            .slice(0, 1)
+            .map((i) => `${i.sinal > 0 ? "+" : "−"} ${formatCurrencyCurto(i.total)} ${i.label}`)
+            .join(" · "),
+    acao: itens7d.length > 0 ? "Ver" : null,
+    onClick: itens7d.length > 0 ? () => setPainel("7dias") : undefined,
+  });
+  cardsPendencia.push({
+    key: "cobranca",
+    atencao: vencidas > 0,
+    Icon: vencidas > 0 ? AlertTriangle : CheckCircle2,
+    titulo: vencidas > 0 ? `${vencidas} em atraso` : "Nada em atraso",
+    sub:
+      vencidas > 0
+        ? nomesClientesVencidos.slice(0, 3).join(", ")
+        : contratosAtivos.length > 0
+        ? `${contratosAtivos.length - vencidas} cliente${contratosAtivos.length - vencidas === 1 ? "" : "s"} em dia${
+            proximoVencimentoDias != null ? ` · próx. venc. em ${proximoVencimentoDias} dia${proximoVencimentoDias === 1 ? "" : "s"}` : ""
+          }`
+        : "Nenhum contrato ativo ainda.",
+    acao: vencidas > 0 ? "Cobrar" : null,
+    onClick: vencidas > 0 ? () => onIrPara?.("fluxo") : undefined,
+  });
+  const contagemPendencias = cardsPendencia.filter((c) => c.atencao).length;
 
   return (
-    <div>
-      <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-        <h2 style={{ fontFamily: HEAD_FONT, fontSize: 22, fontWeight: 700, color: theme.mint }}>Visão geral</h2>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => setValoresOcultos((v) => !v)}
-            className="mbr-hover-grow flex items-center justify-center rounded-full"
-            title={valoresOcultos ? "Mostrar valores" : "Ocultar valores"}
-            style={{ width: 44, height: 44, background: theme.card, border: `1px solid ${theme.outline}`, color: theme.text, transition: "transform 0.18s ease" }}
-          >
-            {valoresOcultos ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
-          <div className="flex items-center gap-1 rounded-full px-1.5 py-1" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-            <button onClick={irParaMesAnteriorRef} className="mbr-hover-grow flex items-center justify-center rounded-full" style={{ width: 26, height: 26, color: theme.text }}>
-              <ChevronLeft size={16} />
-            </button>
-            <span className="relative inline-block overflow-hidden align-middle" style={{ minWidth: 74, height: 15 }}>
-              {/* um span só, remontado (via key) a cada mês — sem manter o texto antigo
-                  na tela junto com o novo, então nunca tem risco de um ficar sobreposto
-                  no outro, misturando as letras dos dois meses por um instante */}
-              <span
-                key={rotuloMes}
-                className="absolute inset-0 text-xs font-semibold text-center"
+    <div className="flex flex-col" style={{ gap: 12 }}>
+      {/* Faixa 1 — Precisa de você */}
+      <div className="flex flex-col" style={{ gap: 9 }}>
+        <div className="flex items-baseline" style={{ gap: 10 }}>
+          <span style={{ ...RD_LABEL, color: "var(--rd-attention)" }}>Precisa de você</span>
+          <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>
+            {contagemPendencias} pendência{contagemPendencias === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="flex flex-col lg:flex-row" style={{ gap: 12 }}>
+          {cardsPendencia.map((c) => {
+            const Icon = c.Icon;
+            return (
+              <div
+                key={c.key}
                 style={{
-                  color: theme.text,
-                  fontFamily: BODY_FONT,
-                  animation: `${direcaoMes >= 0 ? "mbrMesEntraDireita" : "mbrMesEntraEsquerda"} 0.26s cubic-bezier(0.32, 0.72, 0, 1) both`,
-                }}
+                  flex: 1,
+                  minWidth: 0,
+                  background: c.atencao ? "var(--rd-attention-bg)" : "var(--rd-surface)",
+                  border: `1px solid ${c.atencao ? "var(--rd-attention-border)" : "var(--rd-border)"}`,
+                  borderRadius: 14,
+                  padding: "11px 13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10 }}
               >
-                {rotuloMes}
-              </span>
-            </span>
-            <button
-              onClick={irParaProximoMesRef}
-              disabled={!podeAvancarMes}
-              className={podeAvancarMes ? "mbr-hover-grow flex items-center justify-center rounded-full" : "flex items-center justify-center rounded-full"}
-              style={{ width: 26, height: 26, color: podeAvancarMes ? theme.text : theme.textMuted, opacity: podeAvancarMes ? 1 : 0.4, cursor: podeAvancarMes ? "pointer" : "default" }}
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 9,
+                    background: c.atencao ? "#2A2115" : "#1E2A22",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flex: "none",
+                    color: c.atencao ? "var(--rd-attention)" : "var(--rd-positive)" }}
+                >
+                  <Icon size={16} strokeWidth={2.75} />
+                </div>
+                <div className="flex flex-col" style={{ gap: 2, minWidth: 0 }}>
+                  <span className="truncate" style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rd-text)" }}>{c.titulo}</span>
+                  <span className="truncate" style={{ fontSize: 12, color: c.atencao ? "var(--rd-attention-text)" : "var(--rd-text-dim)" }}>
+                    {c.sub}
+                  </span>
+                </div>
+                {c.acao && (
+                  <button
+                    onClick={c.onClick}
+                    style={{
+                      marginLeft: "auto",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: c.atencao ? "var(--rd-attention)" : "var(--rd-brand-light)",
+                      border: `1px solid ${c.atencao ? "var(--rd-attention-border)" : "#2E4034"}`,
+                      borderRadius: 999,
+                      padding: "6px 12px",
+                      flex: "none",
+                      background: "transparent" }}
+                  >
+                    {c.acao}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Faixa 2 — Caixa do mês + Frota agora */}
+      <div className="flex flex-col lg:flex-row" style={{ gap: 14 }}>
+        <div
+          className="flex flex-col"
+          style={{ flex: "1.35 1 380px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "15px 18px", gap: 12 }}
+        >
+          <div className="flex items-center flex-wrap" style={{ gap: 10 }}>
+            <span style={RD_LABEL}>Caixa de {nomeDoMesRef}</span>
+            {/* seletor de mês — dá pra voltar pra agosto, julho etc. e a tela inteira
+                (valores, detalhamento e gráfico) acompanha o mês escolhido. Fica na
+                direita, no lugar onde antes ficava o 3m/6m/12m: trocar de mês é o que
+                se usa toda hora, o tamanho da janela do gráfico não era */}
+            <div
+              className="flex items-center"
+              style={{ marginLeft: "auto", gap: 2, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "3px 5px" }}
             >
-              <ChevronRight size={16} />
-            </button>
+              <button
+                onClick={irParaMesAnterior}
+                aria-label="Mês anterior"
+                className="flex items-center justify-center"
+                style={{ width: 24, height: 24, borderRadius: 999, color: "var(--rd-text-muted)", background: "none" }}
+              >
+                <ChevronLeft size={15} strokeWidth={2.75} />
+              </button>
+              <span className="relative inline-block overflow-hidden text-center" style={{ minWidth: 62, height: 16 }}>
+                {/* um span só, remontado a cada mês (via key) — nunca dois rótulos
+                    sobrepostos misturando as letras de dois meses */}
+                <span
+                  key={rotuloMes}
+                  className="absolute inset-0"
+                  style={{
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    color: "var(--rd-text)",
+                    animation: `${direcaoMes >= 0 ? "mbrMesEntraDireita" : "mbrMesEntraEsquerda"} 0.26s cubic-bezier(0.32, 0.72, 0, 1) both` }}
+                >
+                  {rotuloMes}
+                </span>
+              </span>
+              <button
+                onClick={irParaProximoMes}
+                disabled={!podeAvancarMes}
+                aria-label="Próximo mês"
+                className="flex items-center justify-center"
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 999,
+                  background: "none",
+                  color: "var(--rd-text-muted)",
+                  opacity: podeAvancarMes ? 1 : 0.35,
+                  cursor: podeAvancarMes ? "pointer" : "default" }}
+              >
+                <ChevronRight size={15} strokeWidth={2.75} />
+              </button>
+            </div>
             {botaoAtualMontado && (
               <button
                 onClick={() => setMesEscolhido(null)}
-                className={`text-xs font-semibold rounded-full px-2 py-1 ml-1 ${mesEscolhido ? "mbr-botao-atual-entra" : "mbr-botao-atual-sai"}`}
-                style={{ background: hexToRgba(theme.mint, 0.16), color: theme.mint, fontFamily: BODY_FONT, whiteSpace: "nowrap", overflow: "hidden" }}
+                className={mesEscolhido ? "mbr-botao-atual-entra" : "mbr-botao-atual-sai"}
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  borderRadius: 999,
+                  padding: "4px 11px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  background: "var(--rd-brand)",
+                  color: "var(--rd-brand-light)" }}
               >
                 Atual
               </button>
             )}
+            <button
+              onClick={() => setValoresOcultos((v) => !v)}
+              title={valoresOcultos ? "Mostrar valores" : "Ocultar valores"}
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: 999,
+                background: "var(--rd-surface-2)",
+                border: "1px solid var(--rd-border)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--rd-text-muted)" }}
+            >
+              {valoresOcultos ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
           </div>
-        </div>
-      </div>
 
-
-      {/* KPIs principais — Faturamento é o card alto com mini-gráfico. Lucro operacional
-          e Saldo de caixa ficam lado a lado embaixo: o primeiro ignora investimento/
-          expansão de propósito (comprar moto nova não é "prejuízo operacional"), o
-          segundo conta tudo que de fato entrou/saiu da conta — os dois às vezes dão
-          número bem diferente no mesmo mês, por isso mostrar os dois junto com legenda */}
-      <Reveal>
-        <HeroStat
-          label={`Faturamento (${rotuloMes})`}
-          value={entradasMes}
-          format={fmt}
-          icon={TrendingUp}
-          accent={theme.mint}
-          deltaPercent={deltaFaturamento}
-          deltaLabel={`vs ${rotuloMesAnterior}`}
-          sparkData={sparkFaturamento}
-          detalhes={detalhesFaturamento}
-        />
-      </Reveal>
-
-      {/* Lucro operacional + Déficit de caixa logo depois do Faturamento — par
-          pequeno/quadrado; Payback (grande) vem depois, e só então Inadimplência +
-          Motos paradas (outro par pequeno) */}
-      <Reveal delay={60}>
-        <div className="grid grid-cols-2 gap-3 mb-3 mt-3">
-          <HeroStat
-            label={`${lucroMes >= 0 ? "Lucro operacional" : "Prejuízo operacional"} (${rotuloMes})`}
-            caption="sem investimentos"
-            footnote={`margem: ${margemLucro.toFixed(1)}%`}
-            value={Math.abs(lucroMes)}
-            format={fmt}
-            icon={Wallet}
-            accent={lucroMes >= 0 ? theme.mint : theme.coral}
-            deltaPercent={deltaLucro}
-            deltaLabel={`vs ${rotuloMesAnterior}`}
-            detalhes={detalhesLucro}
-          />
-          <HeroStat
-            label={`${saldoCaixaMes >= 0 ? "Saldo de caixa" : "Déficit de caixa"} (${rotuloMes})`}
-            caption="com investimentos"
-            value={Math.abs(saldoCaixaMes)}
-            format={fmt}
-            icon={Landmark}
-            accent={saldoCaixaMes >= 0 ? theme.mint : theme.coral}
-            detalhes={detalhesSaldo}
-          />
-        </div>
-      </Reveal>
-
-      {paybackPorMoto.length > 0 && (
-        <Reveal delay={70}>
-          <div className="rounded-2xl p-4 mb-3 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-            <div className="flex items-center justify-between mb-1">
-              <SectionTitle color={theme.mint} className="">Payback por moto</SectionTitle>
-              {paybackPorMoto.length > 8 && (
-                <button
-                  onClick={() => setVerTodasRetorno((v) => !v)}
-                  className="text-xs font-semibold flex-shrink-0"
-                  style={{ color: theme.mint, fontFamily: BODY_FONT }}
+          {/* os três blocos (resultado, faturamento/margem e a legenda) numa faixa só.
+              Com o número a 42px nada cabia lado a lado no iPad e cada bloco caía numa
+              linha, esticando o cartão pra quase duas telas de altura. Os tamanhos agora
+              acompanham a largura (clamp), então a faixa se mantém em uma linha */}
+          <div className="flex items-end flex-wrap" style={{ gap: 16, rowGap: 12 }}>
+            <div className="flex flex-col" style={{ gap: 5, flex: "none" }}>
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>Resultado do mês</span>
+              <ValorComDetalhe itens={detalhesResultado} fmt={fmt}>
+                <span
+                  style={{
+                    fontSize: "clamp(21px, 2.3vw, 29px)",
+                    fontWeight: 700,
+                    letterSpacing: "-0.035em",
+                    lineHeight: 1,
+                    whiteSpace: "nowrap",
+                    color: lucroMes >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}
                 >
-                  {verTodasRetorno ? "Ver menos" : `Ver mais (${paybackPorMoto.length - 8})`}
-                </button>
+                  {lucroMes < 0 ? "− " : ""}
+                  {fmt(Math.abs(lucroMes))}
+                </span>
+              </ValorComDetalhe>
+            </div>
+            <div className="flex" style={{ gap: 16, flex: "none", flexWrap: "nowrap", paddingBottom: 2, borderLeft: "1px solid var(--rd-border)", paddingLeft: 16 }}>
+              <div className="flex flex-col" style={{ gap: 4 }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Faturamento</span>
+                <ValorComDetalhe itens={detalhesEntradas} fmt={fmt}>
+                  <span style={{ fontSize: "clamp(14px, 1.35vw, 17px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, whiteSpace: "nowrap", color: "var(--rd-text)" }}>
+                    {fmt(entradasMes)}
+                  </span>
+                </ValorComDetalhe>
+                {deltaFaturamento != null && (
+                  <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", color: deltaFaturamento >= 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                    {deltaFaturamento >= 0 ? "↗" : "↘"} {Math.abs(deltaFaturamento).toFixed(0)}% vs {rotuloMesAnterior}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-col" style={{ gap: 4 }}>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>Margem de lucro</span>
+                <span style={{ fontSize: "clamp(14px, 1.35vw, 17px)", fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--rd-text)" }}>
+                  {margemLucro.toFixed(1)}%
+                </span>
+                <span style={{ fontSize: 11, color: "var(--rd-text-dim)", whiteSpace: "nowrap" }}>média 12m: {margemMedia12m.toFixed(1)}%</span>
+              </div>
+            </div>
+
+            {/* o que entrou e o que saiu, com o detalhamento no clique. Acompanha o mês
+                escolhido no gráfico: tocar num mês de trás muda estes números */}
+            {/* flex:none fazia a legenda manter a largura natural e VAZAR pro lado de fora
+                do cartão quando o mês escolhido tinha valores grandes — agora ela encolhe
+                e quebra dentro do cartão */}
+            <div className="flex items-center flex-wrap" style={{ gap: 14, rowGap: 6, paddingBottom: 3, flex: "1 1 auto", minWidth: 0 }}>
+              {!mesDoGraficoEhReferencia && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--rd-attention)" }}>{mesDoGrafico.mes}</span>
+              )}
+              <LegendaPonto
+                cor="var(--rd-positive)"
+                label="Entrou"
+                valor={fmt(mesDoGrafico.Entradas)}
+                itens={mesDoGraficoEhReferencia ? detalhesEntradas : null}
+                fmt={fmt}
+              />
+              <LegendaPonto
+                cor="var(--rd-negative)"
+                label="Saiu"
+                valor={fmt(mesDoGrafico.Saídas)}
+                itens={mesDoGraficoEhReferencia ? detalhesSaidas : null}
+                fmt={fmt}
+              />
+              {mesDoGraficoEhReferencia ? (
+                <LegendaPonto cor="var(--rd-attention)" label="A receber" valor={fmt(aReceberMes)} />
+              ) : (
+                <LegendaPonto cor="var(--rd-attention)" label="Lucro" valor={fmt(mesDoGrafico.Lucro)} />
               )}
             </div>
-            <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-              Quanto falta pra cada moto se pagar (compra + custos + manutenção), da mais perto pra mais longe.
-            </div>
-            <div className="flex flex-col gap-3">
-              {(verTodasRetorno ? paybackPorMoto : paybackPorMoto.slice(0, 8)).map((r) => {
-                const clamped = Math.max(0, Math.min(100, r.percentPago));
-                // cor comunica "quão perto está de bater o olho": verde até 6 meses,
-                // âmbar de 7 a 12, vermelho acima disso — sem contrato ativo fica neutro
-                // (não dá pra comparar prazo de algo que não está gerando receita agora)
-                const cor = r.jaPagou
-                  ? theme.mint
-                  : r.mesesRestantes == null
-                  ? theme.textFaint
-                  : r.mesesRestantes <= 6
-                  ? theme.mint
-                  : r.mesesRestantes <= 12
-                  ? theme.amber
-                  : theme.coral;
-                const legenda = r.jaPagou ? "Pago" : r.mesesRestantes != null ? `faltam ~${r.mesesRestantes} ${r.mesesRestantes === 1 ? "mês" : "meses"}` : "sem contrato ativo";
+          </div>
+
+          {/* o "Saldo previsto" vai junto da legenda do gráfico: sozinho ele virava mais
+              uma linha no cartão, e o cartão precisa caber na tela do iPad deitado */}
+          <GraficoCaixa
+            data={chartData}
+            iAtivo={iMesGrafico}
+            onAtivo={setIMesGrafico}
+            rodape={
+              <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+                Saldo previsto 12m <strong style={{ color: "var(--rd-brand-light)" }}>{fmt(saldoPrevisto12Meses)}</strong>
+              </span>
+            }
+          />
+        </div>
+
+        <div
+          className="flex flex-col"
+          style={{ flex: "1 1 280px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "15px 18px", gap: 11 }}
+        >
+          <div className="flex items-center">
+            <span style={RD_LABEL}>Frota agora</span>
+            <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--rd-text-dim)" }}>
+              {alugadas} de {motos.length} rodando
+            </span>
+          </div>
+
+          {motos.length === 0 ? (
+            <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nenhuma moto cadastrada ainda.</span>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+              {/* no máximo 7 + um atalho: com a frota crescendo, a grade ia ganhando
+                  linha atrás de linha e era ela que tirava a Visão geral da tela */}
+              {[...motos]
+                .sort((a, b) => (a.status === "alugada" ? 0 : 1) - (b.status === "alugada" ? 0 : 1))
+                .slice(0, motos.length > 8 ? 7 : 8)
+                .map((m) => {
+                const alugada = m.status === "alugada";
+                const dias = !alugada ? diasParadaDaMoto(m) : null;
+                const rotuloValor = alugada
+                  ? fmt(m.contratoAtual?.valorMensal || 0)
+                  : m.status === "manutencao"
+                  ? "oficina"
+                  : m.status === "preparacao"
+                  ? "preparo"
+                  : `${dias ?? 0} dia${dias === 1 ? "" : "s"}`;
                 return (
-                  <div key={r.placa} title={valoresOcultos ? undefined : `${formatCurrency(r.recebidoReal)} de ${formatCurrency(r.investimentoTotal)}`}>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span style={{ fontFamily: MONO_FONT, fontWeight: 500, color: theme.text }}>{formatPlaca(r.placa)}</span>
-                      <span style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>{legenda}</span>
-                    </div>
-                    <BarraComCometa pct={clamped} color={cor} />
+                  <div
+                    key={m.id}
+                    style={{
+                      background: alugada ? "var(--rd-brand)" : "var(--rd-attention-bg-2)",
+                      border: alugada ? "none" : "1px solid var(--rd-attention-border)",
+                      borderRadius: 10,
+                      padding: "8px 7px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 3,
+                      minWidth: 0 }}
+                  >
+                    <span className="truncate" style={{ maxWidth: "100%", fontFamily: "ui-monospace, monospace", fontSize: 11.5, fontWeight: 600, color: alugada ? "var(--rd-text)" : "var(--rd-attention)" }}>
+                      {formatPlaca(m.placa)}
+                    </span>
+                    <span className="truncate" style={{ maxWidth: "100%", fontSize: 10, color: alugada ? "var(--rd-brand-light)" : "var(--rd-text-dim)" }}>{rotuloValor}</span>
                   </div>
                 );
               })}
+              {motos.length > 8 && (
+                <button
+                  onClick={() => onIrPara?.("motos")}
+                  style={{
+                    background: "var(--rd-surface-2)",
+                    border: "1px solid var(--rd-border)",
+                    borderRadius: 10,
+                    padding: "8px 7px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 2,
+                    minWidth: 0 }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--rd-brand-light)" }}>+{motos.length - 7}</span>
+                  <span style={{ fontSize: 10, color: "var(--rd-text-dim)" }}>ver todas</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {paybackPorMoto.length > 0 && (
+            <div className="flex flex-col" style={{ gap: 12, paddingTop: 4, borderTop: "1px solid var(--rd-border-soft)" }}>
+              <div className="flex items-baseline flex-wrap" style={{ gap: 8, paddingTop: 10 }}>
+                <span style={RD_LABEL}>Payback</span>
+                <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>quanto falta pra cada moto se pagar</span>
+              </div>
+              <div className="flex flex-col" style={{ gap: 7 }}>
+                {/* só as 4 mais perto de se pagar — a lista inteira sozinha estourava a
+                    altura da tela, e o resto está na Frota, com a mesma barra */}
+                {paybackPorMoto.slice(0, 4).map((r) => {
+                  const parada = r.status !== "alugada";
+                  const cor = parada ? "var(--rd-negative)" : r.percentPago >= 50 ? "var(--rd-positive)" : r.percentPago >= 15 ? "var(--rd-attention)" : "var(--rd-negative)";
+                  return (
+                    <div key={r.placa} className="flex items-center" style={{ gap: 12 }}>
+                      <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 11.5, color: "var(--rd-text-muted)", width: 66, flex: "none" }}>
+                        {formatPlaca(r.placa)}
+                      </span>
+                      <div style={{ flex: 1 }}>
+                        <BarraComCometa pct={r.percentPago} color={cor} />
+                      </div>
+                      <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)", width: 84, textAlign: "right", flex: "none" }}>
+                        {parada ? "parada" : r.jaPagou ? "quitada" : fmt(r.restante)}
+                      </span>
+                    </div>
+                  );
+                })}
+                {paybackPorMoto.length > 4 && (
+                  <button
+                    onClick={() => onIrPara?.("motos")}
+                    style={{ alignSelf: "flex-start", background: "none", fontSize: 11.5, fontWeight: 700, color: "var(--rd-brand-light)", marginTop: 2 }}
+                  >
+                    ver as {paybackPorMoto.length} na Frota ›
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* PAINÉIS SOBREPOSTOS — a lista completa abre por cima, sem esticar a tela */}
+      {painel === "mes" && (
+        <Modal title={`Em aberto em ${nomeDoMesRef}`} onClose={() => setPainel(null)}>
+          <div className="flex items-center flex-wrap" style={{ gap: 18, marginBottom: 14 }}>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A receber</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: "var(--rd-positive)" }}>{fmt(emAbertoNoMes.totalReceber)}</span>
+            </div>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A pagar</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: "var(--rd-negative)" }}>{fmt(emAbertoNoMes.totalPagar)}</span>
             </div>
           </div>
-        </Reveal>
+          <div className="flex flex-col" style={{ gap: 6, paddingTop: 8, borderTop: "1px solid var(--rd-border-soft)" }}>
+            {contasDoMes.map((it) => (
+              <LinhaConta key={`${it.sinal}-${it.id}`} item={it} />
+            ))}
+          </div>
+        </Modal>
       )}
 
-      <Reveal delay={80}>
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div className="rounded-2xl p-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                className="rounded-full flex items-center justify-center flex-shrink-0"
-                style={{ width: 30, height: 30, background: theme.card2 }}
-              >
-                <AlertTriangle size={14} color={theme.coral} />
-              </div>
-              <span className="text-xs uppercase tracking-wide" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Taxa de inadimplência
+      {painel === "7dias" && (
+        <Modal title="Próximos 7 dias" onClose={() => setPainel(null)}>
+          <div className="flex flex-col" style={{ gap: 6 }}>
+            {itens7d.length === 0 ? (
+              <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nenhum vencimento pela frente.</span>
+            ) : (
+              itens7d.map((it, i) => (
+                <div key={i} className="flex items-center" style={{ gap: 10, paddingTop: 4 }}>
+                  <span className="truncate" style={{ fontSize: 12.5, flex: 1, color: "var(--rd-text)" }}>{it.label}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, flex: "none", color: it.sinal > 0 ? "var(--rd-positive)" : "var(--rd-negative)" }}>
+                    {it.sinal > 0 ? "+ " : "− "}
+                    {fmt(it.total)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Faixa 3 — Este mês / Onde estão / Do começo */}
+      <div className="flex flex-col lg:flex-row" style={{ gap: 14 }}>
+        {/* ESTE MÊS — o que ainda falta entrar e sair, já com os itens embaixo: o total
+            sozinho não diz de quem cobrar nem o que pagar, e era pra isso que dava
+            vontade de clicar */}
+        <div
+          className="flex flex-col"
+          style={{ flex: "1.25 1 300px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "14px 17px", gap: 10 }}
+        >
+          <div className="flex items-baseline flex-wrap" style={{ gap: 8 }}>
+            <span style={RD_LABEL}>Este mês</span>
+            <span style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>o que falta</span>
+          </div>
+
+          <div className="flex items-end flex-wrap" style={{ gap: 18 }}>
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A receber</span>
+              <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "var(--rd-positive)" }}>
+                {fmt(emAbertoNoMes.totalReceber)}
               </span>
             </div>
-            <div style={{ fontFamily: HEAD_FONT, fontSize: 24, fontWeight: 600, color: vencidas > 0 ? theme.coral : theme.text }}>
-              <CountUp value={taxaInadimplencia} format={(v) => `${v.toFixed(1)}%`} />
-            </div>
-            <div className="text-xs mt-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-              {vencidas} de {clientes.length} cliente{clientes.length === 1 ? "" : "s"} com pagamento atrasado
+            <div className="flex flex-col" style={{ gap: 2 }}>
+              <span style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>A pagar</span>
+              <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "var(--rd-negative)" }}>
+                {fmt(emAbertoNoMes.totalPagar)}
+              </span>
             </div>
           </div>
 
-          <div className="rounded-2xl p-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                className="rounded-full flex items-center justify-center flex-shrink-0"
-                style={{ width: 30, height: 30, background: theme.card2 }}
-              >
-                <Timer size={14} color={theme.amber} />
-              </div>
-              <span className="text-xs uppercase tracking-wide" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Motos paradas
-              </span>
+          {contasDoMes.length === 0 ? (
+            <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>Nada em aberto neste mês.</span>
+          ) : (
+            <div className="flex flex-col" style={{ gap: 6, paddingTop: 2, borderTop: "1px solid var(--rd-border-soft)" }}>
+              {contasDoMes.slice(0, 3).map((it) => (
+                <LinhaConta key={`${it.sinal}-${it.id}`} item={it} />
+              ))}
+              {/* a lista inteira abre num painel POR CIMA da tela — esticar o cartão pra
+                  baixo empurrava a Visão geral inteira e tirava ela da tela */}
+              {contasDoMes.length > 3 && (
+                <button
+                  onClick={() => setPainel("mes")}
+                  style={{ alignSelf: "flex-start", background: "none", fontSize: 11.5, fontWeight: 700, color: "var(--rd-brand-light)", marginTop: 2 }}
+                >
+                  ver as outras {contasDoMes.length - 3}
+                </button>
+              )}
             </div>
-            {motosParadas.length === 0 ? (
-              <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Nenhuma moto disponível parada agora.
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1">
-                {motosParadas.slice(0, 3).map((m) => (
-                  <div key={m.placa} className="flex items-center justify-between text-xs">
-                    <span style={{ fontFamily: MONO_FONT, fontWeight: 500, color: theme.text }}>{formatPlaca(m.placa)}</span>
-                    <span style={{ color: m.dias > 30 ? theme.coral : theme.textMuted, fontFamily: BODY_FONT }}>
-                      há {m.dias} dia{m.dias === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                ))}
-                {motosParadas.length > 3 && (
-                  <div className="text-xs mt-0.5" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                    +{motosParadas.length - 3} outra{motosParadas.length - 3 === 1 ? "" : "s"} parada{motosParadas.length - 3 === 1 ? "" : "s"}
-                  </div>
-                )}
+          )}
+        </div>
+
+        {/* mapa de verdade, não um par de contadores: é ele que responde "onde estão"
+            de bater o olho. O cartão inteiro é o atalho pra tela de Rastreamento */}
+        <div
+          onClick={() => onIrPara?.("rastreio")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onIrPara?.("rastreio")}
+          className="flex flex-col"
+          style={{
+            flex: "1 1 260px",
+            minWidth: 0,
+            background: "var(--rd-surface)",
+            border: "1px solid var(--rd-border)",
+            borderRadius: 16,
+            padding: "14px 17px",
+            gap: 10,
+            textAlign: "left",
+            cursor: "pointer" }}
+        >
+          <div className="flex items-center">
+            <span style={RD_LABEL}>Onde estão</span>
+            <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--rd-text-dim)" }}>ver mapa ›</span>
+          </div>
+          <div style={{ flex: 1, minHeight: 104, borderRadius: 12, overflow: "hidden", border: "1px solid var(--rd-border-soft)", position: "relative" }}>
+            <TrackingMap
+              mini
+              link={config?.linkRastreioGeral || LINK_RASTREIO_PADRAO}
+              motos={motos}
+              clientes={clientes}
+              height="100%"
+              rounded={false}
+              onResumo={setResumoRastreio}
+            />
+            {/* só aparece quando tem moto rodando de verdade (rastreador verde). Parada
+                é o estado normal da frota, não é notícia — e a pílula ficava brigando
+                com a atribuição do OpenStreetMap, que é obrigatória e mora embaixo */}
+            {resumoRastreio.emMovimento > 0 && (
+              <div
+                className="absolute flex items-center"
+                style={{
+                  left: 10,
+                  top: 10,
+                  gap: 6,
+                  borderRadius: 999,
+                  padding: "4px 11px",
+                  background: "rgba(14, 21, 18, 0.88)",
+                  border: "1px solid var(--rd-border)",
+                  pointerEvents: "none" }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--rd-positive)", flex: "none" }} />
+                <span style={{ fontSize: 11.5, color: "var(--rd-positive)", fontWeight: 700 }}>
+                  {resumoRastreio.emMovimento} em movimento
+                </span>
               </div>
             )}
           </div>
         </div>
-      </Reveal>
-      {!mesEscolhido && mesRef !== mesCalendario && (
-        <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Ainda não há lançamentos em {monthLabel(mesCalendario)} — mostrando o último mês com movimento.
-        </div>
-      )}
 
-      {/* Indicadores secundários — grade fixa (2 colunas no celular), pra não quebrar torto */}
-      <Reveal delay={80}>
         <div
-          className="rounded-2xl mb-3 p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mbr-card-lift"
-          style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}
+          className="flex flex-col"
+          style={{ flex: "0.8 1 220px", minWidth: 0, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", borderRadius: 16, padding: "14px 17px", gap: 12 }}
         >
-          {[
-            { icon: TrendingUp, label: "Faturamento previsto/mês", value: faturamentoPrevisto, format: fmt, accent: theme.mint },
-            { icon: TrendingDown, label: `Gastos operacionais (${rotuloMes})`, value: saidasMes, format: fmt, accent: theme.coral },
-            { icon: Wallet, label: "Ticket médio", value: ticketMedio, format: fmt, accent: theme.mint },
-            { icon: Users, label: "Total de clientes", value: totalClientes, accent: theme.textMuted },
-            { icon: TrendingUp, label: "Investido em frota", value: investimentoFrota, format: fmt, accent: theme.textMuted },
-            { icon: Wallet, label: "Faturamento acumulado", value: faturamentoAcumulado, format: fmt, accent: theme.mint },
-            { icon: Wrench, label: "Manutenção acumulada", value: manutencaoAcumulada, format: fmt, accent: theme.coral },
-            { icon: FileText, label: "Contratos encerrados", value: contratosEncerrados, accent: theme.textMuted },
-          ].map((s) => (
-            <div key={s.label} className="flex items-center gap-2 min-w-0">
-              <div
-                className="rounded-full flex items-center justify-center flex-shrink-0"
-                style={{ width: 30, height: 30, background: theme.card2 }}
-              >
-                <s.icon size={14} color={s.accent} />
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-xs truncate" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                  {s.label}
-                </span>
-                <span style={{ fontFamily: HEAD_FONT, fontWeight: 700, fontSize: 14, color: theme.text }}>
-                  <CountUp value={s.value} format={s.format} />
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Reveal>
-
-      {/* Status da frota — anel + números, um card só */}
-      <Reveal delay={140}>
-        <div
-          className="rounded-2xl p-4 mb-4 flex items-center gap-5 flex-wrap mbr-card-lift"
-          style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}
-        >
-          <RadialStat bare label="Taxa de ocupação" percent={taxaOcupacao} color={theme.amber} sublabel={`${alugadas} de ${motos.length} motos`} />
-          <div className="flex-1 grid grid-cols-4 gap-2 min-w-[220px]" style={{ borderLeft: `1px solid ${theme.divider}`, paddingLeft: 16 }}>
-            {[
-              { label: "Motos", value: motos.length, color: theme.text },
-              { label: "Alugadas", value: alugadas, color: theme.amber },
-              { label: "Disponíveis", value: disponiveis, color: theme.mint },
-              { label: "Atrasados", value: vencidas, color: vencidas > 0 ? theme.coral : theme.textMuted },
-            ].map((it) => (
-              <div key={it.label} className="min-w-0">
-                <div style={{ fontFamily: HEAD_FONT, fontSize: 19, fontWeight: 700, color: it.color }}>
-                  <CountUp value={it.value} />
-                </div>
-                <div className="text-xs truncate" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                  {it.label}
-                </div>
-              </div>
-            ))}
+          <span style={RD_LABEL}>Do começo</span>
+          <div className="flex flex-col" style={{ gap: 9 }}>
+            <ValorPequeno label="Investido em frota" valor={fmt(investimentoFrota)} />
+            <ValorPequeno label="Já faturado" valor={fmt(faturamentoAcumulado)} cor="var(--rd-brand-light)" />
+            <ValorPequeno label="Ticket médio" valor={fmt(ticketMedio)} />
           </div>
-        </div>
-      </Reveal>
-
-      <Reveal delay={0}>
-      <div className="rounded-2xl p-4 mb-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <SectionTitle color={theme.mint} className="">Entradas, saídas e lucro</SectionTitle>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div ref={periodoToggleRef} className="relative flex rounded-full overflow-hidden" style={{ border: `1px solid ${theme.cardBorder}` }}>
-              {periodoPillRect && (
-                <span
-                  className="absolute rounded-full"
-                  style={{
-                    left: 0,
-                    top: periodoPillRect.top,
-                    width: periodoPillRect.width,
-                    height: periodoPillRect.height,
-                    background: theme.mint,
-                    willChange: "transform",
-                    transform: `translateX(${periodoPillRect.left}px)`,
-                    transition: "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)",
-                  }}
-                />
-              )}
-              {[
-                { id: "3m", label: "3m" },
-                { id: "6m", label: "6m" },
-                { id: "12m", label: "12m" },
-                { id: "tudo", label: "Tudo" },
-              ].map((op) => (
-                <button
-                  key={op.id}
-                  ref={(el) => (periodoSlotRefs.current[op.id] = el)}
-                  onClick={() => setPeriodoGrafico(op.id)}
-                  className="relative text-xs font-semibold px-2.5 py-1"
-                  style={{
-                    color: periodoGrafico === op.id ? theme.mintText : theme.textMuted,
-                    transition: "color 0.15s ease",
-                    zIndex: 1,
-                  }}
-                >
-                  {op.label}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setMostrarInvestimentos((v) => !v)}
-              className="text-xs font-semibold rounded-full px-2.5 py-1"
-              style={{
-                border: `1px solid ${theme.outline}`,
-                background: mostrarInvestimentos ? theme.card2 : "transparent",
-                color: mostrarInvestimentos ? theme.text : theme.textMuted,
-              }}
-            >
-              Investimentos
-            </button>
-          </div>
-        </div>
-        <div className="flex gap-4 mb-3 text-xs flex-wrap" style={{ fontFamily: BODY_FONT }}>
-          <span style={{ color: theme.mint }}>Entradas no período: {fmt(chartData.reduce((s, d) => s + d.Entradas, 0))}</span>
-          <span style={{ color: theme.coral }}>Saídas no período: {fmt(chartData.reduce((s, d) => s + d.Saídas, 0))}</span>
-          {investMontada && (
-            <span style={{ color: theme.textMuted, opacity: investOpaca ? 1 : 0, transition: "opacity 0.3s ease" }}>
-              Investido no período: {fmt(chartData.reduce((s, d) => s + d.Investimentos, 0))}
-            </span>
-          )}
-        </div>
-        <div style={{ width: "100%", height: 260 }}>
-          <ResponsiveContainer>
-            <ComposedChart data={chartData}>
-              <defs>
-                <linearGradient id="mbrGradEntradas" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={theme.mint} stopOpacity={0.45} />
-                  <stop offset="100%" stopColor={theme.mint} stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="mbrGradSaidas" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={theme.coral} stopOpacity={0.4} />
-                  <stop offset="100%" stopColor={theme.coral} stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="mbrGradInvest" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={theme.chartMuted} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={theme.chartMuted} stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="mbrGradLucro" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={theme.amber} stopOpacity={0.4} />
-                  <stop offset="100%" stopColor={theme.amber} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder} vertical={false} />
-              <XAxis dataKey="mes" stroke={theme.textMuted} fontSize={12} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="left" stroke={theme.textMuted} fontSize={11} tickFormatter={fmtCompact} width={56} axisLine={false} tickLine={false} />
-              <YAxis
-                yAxisId="right"
-                orientation="right"
-                stroke={theme.amber}
-                fontSize={11}
-                tickFormatter={fmtCompact}
-                width={56}
-                axisLine={false}
-                tickLine={false}
-              />
-              <Tooltip content={<TooltipSemDuplicata formatter={(value, name) => [fmt(value), name]} />} />
-              <Legend />
-              {/* Lucro vem PRIMEIRO (mais embaixo na pilha de desenho) porque usa uma escala
-                  (eixo direito) diferente da de Entradas/Saídas — o "zero" dele cai numa
-                  altura de tela diferente do de Entradas/Saídas, então o preenchimento dele
-                  podia acabar desenhado por cima da LINHA das outras duas (não só do fundo).
-                  Desenhando-o antes, Entradas e Saídas sempre ficam por cima, nunca tampadas. */}
-              <Area
-                yAxisId="right"
-                type="monotone"
-                dataKey="Lucro"
-                // sem isso, quando o lucro fica negativo o preenchimento "inverte" e
-                // aparece ACIMA da linha (a área é sempre calculada até o zero, então em
-                // valores negativos ela sobe em vez de descer) — com baseValue="dataMin"
-                // o preenchimento sempre vai da linha até o menor valor do gráfico,
-                // ficando sempre por baixo, nunca por cima
-                baseValue="dataMin"
-                stroke={theme.amber}
-                strokeWidth={2.5}
-                fill="url(#mbrGradLucro)"
-                dot={{ r: 3, fill: theme.amber, strokeWidth: 0 }}
-                activeDot={{ r: 5 }}
-              />
-              <Line
-                yAxisId="right"
-                type="monotone"
-                dataKey="Lucro"
-                stroke={mixColors(theme.amber, "#FFFFFF", 0.65)}
-                strokeOpacity={0.55}
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-                legendType="none"
-                className="mbr-linha-cometa"
-              />
-              <Area
-                yAxisId="left"
-                type="monotone"
-                dataKey="Entradas"
-                stroke={theme.mint}
-                strokeWidth={2.5}
-                fill="url(#mbrGradEntradas)"
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="Entradas"
-                stroke={mixColors(theme.mint, "#FFFFFF", 0.65)}
-                strokeOpacity={0.55}
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-                legendType="none"
-                className="mbr-linha-cometa"
-              />
-              <Area
-                yAxisId="left"
-                type="monotone"
-                dataKey="Saídas"
-                stroke={theme.coral}
-                strokeWidth={2.5}
-                fill="url(#mbrGradSaidas)"
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="Saídas"
-                stroke={mixColors(theme.coral, "#FFFFFF", 0.65)}
-                strokeOpacity={0.55}
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-                legendType="none"
-                className="mbr-linha-cometa"
-              />
-              {investMontada && (
-                <>
-                  <Area
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="Investimentos"
-                    stroke={theme.chartMuted}
-                    strokeWidth={2.5}
-                    fill="url(#mbrGradInvest)"
-                    strokeOpacity={investOpaca ? 1 : 0}
-                    fillOpacity={investOpaca ? 1 : 0}
-                    style={{ transition: "fill-opacity 0.3s ease, stroke-opacity 0.3s ease" }}
-                    isAnimationActive={investOpaca}
-                    animationDuration={900}
-                    animationEasing="ease-out"
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                  {investOpaca && (
-                    <Line
-                      yAxisId="left"
-                      type="monotone"
-                      dataKey="Investimentos"
-                      stroke={mixColors(theme.chartMuted, "#FFFFFF", 0.65)}
-                      strokeOpacity={0.55}
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                      legendType="none"
-                      className="mbr-linha-cometa"
-                    />
-                  )}
-                </>
-              )}
-            </ComposedChart>
-          </ResponsiveContainer>
         </div>
       </div>
-      </Reveal>
-
-      {(futuros || []).length > 0 && (
-        <Reveal delay={50}>
-          <div className="rounded-2xl p-4 mb-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-            <SectionTitle>Contas futuras</SectionTitle>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {(() => {
-                const { previstoEntrada12Meses, previstoSaida12Meses, saldoPrevisto12Meses } = totaisFuturos(futuros, motos);
-                return (
-                  <>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                        A receber (12 meses)
-                      </div>
-                      <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: theme.mint }}>{fmt(previstoEntrada12Meses)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                        A pagar (12 meses)
-                      </div>
-                      <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: theme.coral }}>{fmt(previstoSaida12Meses)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                        Saldo previsto
-                      </div>
-                      <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: saldoPrevisto12Meses >= 0 ? theme.mint : theme.coral }}>
-                        {fmt(saldoPrevisto12Meses)}
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-            <div className="mt-4 pt-4" style={{ borderTop: `1px solid ${theme.divider}` }}>
-              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                Próximos 7 dias
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {(() => {
-                  const { entrada: entrada7d, saida: saida7d, itensEntrada: itensEntrada7d, itensSaida: itensSaida7d } = futurosProximosDias(futuros, motos, 7);
-                  return (
-                    <>
-                      <div>
-                        <div className="text-xs mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                          A receber
-                        </div>
-                        <ValorComDetalhe itens={itensEntrada7d} fmt={fmt}>
-                          <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: theme.mint }}>{fmt(entrada7d)}</div>
-                        </ValorComDetalhe>
-                      </div>
-                      <div>
-                        <div className="text-xs mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                          A pagar
-                        </div>
-                        <ValorComDetalhe itens={itensSaida7d} fmt={fmt}>
-                          <div style={{ fontFamily: HEAD_FONT, fontSize: 18, color: theme.coral }}>{fmt(saida7d)}</div>
-                        </ValorComDetalhe>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
-          </div>
-        </Reveal>
-      )}
-
-      <Reveal>
-      <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-        <div className="rounded-2xl p-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-          <SectionTitle color={theme.mint}>Motos que mais faturam/mês</SectionTitle>
-          {rankingFaturamento.length === 0 ? (
-            <div className="text-xs" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-              Nenhuma moto alugada no momento.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {rankingFaturamento.map((m) => (
-                <div key={m.placa}>
-                  <div className="flex justify-between text-xs mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                    <span>{formatPlaca(m.placa)}</span>
-                    <span>{fmt(m.total)}</span>
-                  </div>
-                  <BarraComCometa pct={(m.total / maxFaturamentoMoto) * 100} color={theme.mint} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl p-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-          <SectionTitle color={theme.coral}>Gastos por natureza (total)</SectionTitle>
-          <div className="flex flex-col gap-2">
-            {porNatureza.map((n) => (
-              <div key={n.natureza}>
-                <div className="flex justify-between text-xs mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                  <span>{n.natureza}</span>
-                  <span>{fmt(n.total)}</span>
-                </div>
-                <BarraComCometa pct={(n.total / maxNatureza) * 100} color={theme.coral} />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {rankingManutencao.length > 0 && (
-          <div className="rounded-2xl p-4 mbr-card-lift" style={{ background: `linear-gradient(150deg, ${theme.card} 0%, ${theme.card2} 130%)`, border: `1px solid ${theme.cardBorder}` }}>
-            <SectionTitle color={theme.coral}>Maiores gastos de manutenção</SectionTitle>
-            <div className="flex flex-col gap-2">
-              {rankingManutencao.map((m) => (
-                <div key={m.placa}>
-                  <div className="flex justify-between text-xs mb-1" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-                    <span>{formatPlaca(m.placa)}</span>
-                    <span>{fmt(m.total)}</span>
-                  </div>
-                  <BarraComCometa pct={(m.total / maxManutencao) * 100} color={theme.coral} />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-      </Reveal>
     </div>
   );
 }
@@ -5970,18 +7944,496 @@ function DashboardView({ motos, lancamentos, clientes, futuros }) {
 =========================================================== */
 const LINK_RASTREIO_PADRAO = "https://web.melocaliza.com.br/sharing/126b3fd40579524296cf586b7625cd97";
 
-function RastreioView({ config, motos, clientes, topInset, bottomInset }) {
-  const link = config?.linkRastreioGeral || LINK_RASTREIO_PADRAO;
+// ---------- leitura dos dados crus do rastreador ----------
+const placaDoDevice = (d) => (d?.name || "").split(" - ")[0].trim();
+const statusDoDevice = (d) => (d?.icon_color === "green" ? "movimento" : d?.icon_color === "yellow" ? "parada" : "offline");
+const RASTREIO_STATUS_ROTULO = { movimento: "Em movimento", parada: "Parada", offline: "Sem sinal" };
+const RASTREIO_STATUS_TOM = {
+  movimento: { cor: "var(--rd-positive)", fundo: "rgba(124,168,113,0.16)" },
+  parada: { cor: "var(--rd-attention-text)", fundo: "var(--rd-attention-bg-2)" },
+  offline: { cor: "var(--rd-negative)", fundo: "rgba(226,106,90,0.14)" },
+};
+
+// HORÁRIO DO ÚLTIMO SINAL. A Melocaliza manda duas coisas: "timestamp" (segundos
+// desde 1970) e "time" no formato brasileiro "15-09-2026 21:24:35". O segundo NÃO é
+// uma data válida pro new Date() (ele espera ano-mês-dia), então quem vale é o
+// timestamp; o texto só entra como reserva, já virado do avesso.
+const dataDoDevice = (d) => {
+  const ts = Number(d?.timestamp || d?.acktimestamp || 0);
+  if (ts > 0) return new Date(ts * 1000);
+  const bruto = d?.dt_tracker || d?.dt_server || d?.time || d?.last_update || "";
+  if (!bruto) return null;
+  const texto = String(bruto).trim();
+  const br = texto.match(/^(\d{2})-(\d{2})-(\d{4})[ T](\d{2}:\d{2}(:\d{2})?)$/);
+  const data = new Date(br ? `${br[3]}-${br[2]}-${br[1]}T${br[4]}` : texto.replace(" ", "T"));
+  return isNaN(data.getTime()) ? null : data;
+};
+
+const haQuantoTempo = (data) => {
+  if (!data) return "";
+  const seg = Math.max(0, Math.round((Date.now() - data.getTime()) / 1000));
+  if (seg < 60) return "agora";
+  const min = Math.round(seg / 60);
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  const resto = min % 60;
+  if (h < 24) return `há ${h} h${resto ? ` ${String(resto).padStart(2, "0")}` : ""}`;
+  return `há ${Math.floor(h / 24)} d`;
+};
+
+// endereço quando o rastreador manda; senão as coordenadas, que é o que dá pra afirmar
+const localDoDevice = (d) => {
+  const end = d?.address || d?.addr || d?.location || "";
+  if (end) return String(end);
+  const lat = parseFloat(d?.lat);
+  const lng = parseFloat(d?.lng);
+  return lat && lng ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : "";
+};
+
+const kmDoDevice = (d) => {
+  const v = d?.distance ?? d?.today_distance ?? d?.odometer_today;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? `${Math.round(n)} km` : "";
+};
+
+function ChipStatus({ status, pequeno }) {
+  const tom = RASTREIO_STATUS_TOM[status];
   return (
-    <TrackingMap
-      link={link}
-      height="100%"
-      rounded={false}
-      motos={motos}
-      clientes={clientes}
-      topInset={topInset}
-      bottomInset={bottomInset}
-    />
+    <span
+      style={{
+        fontSize: pequeno ? 9.5 : 10,
+        fontWeight: 700,
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        borderRadius: 999,
+        padding: pequeno ? "2px 7px" : "3px 9px",
+        background: tom.fundo,
+        color: tom.cor,
+        whiteSpace: "nowrap",
+        flex: "none" }}
+    >
+      {RASTREIO_STATUS_ROTULO[status]}
+    </span>
+  );
+}
+
+function RastreioView({ config, motos, clientes, topInset, bottomInset, onAbrirMoto }) {
+  const link = config?.linkRastreioGeral || LINK_RASTREIO_PADRAO;
+  const mapaRef = useRef(null);
+  const [devices, setDevices] = useState([]);
+  const [busca, setBusca] = useState("");
+  const [filtro, setFiltro] = useState("todas");
+  const [selecionado, setSelecionado] = useState(null);
+  const [atualizadoEm, setAtualizadoEm] = useState(null);
+  const [relatorio, setRelatorio] = useState(false);
+  const [, tique] = useState(0);
+  const [satelite, setSatelite] = useState(false);
+  const [rastro, setRastro] = useState(false);
+
+  // faz o "atualizado há X" andar sozinho
+  useEffect(() => {
+    const id = setInterval(() => tique((n) => n + 1), 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  const receberDevices = useCallback((lista) => {
+    setDevices(lista || []);
+    setAtualizadoEm(Date.now());
+  }, []);
+
+  // cada rastreador vira uma linha já ligada à moto e ao cliente
+  const linhas = useMemo(() => {
+    const peso = { movimento: 0, parada: 1, offline: 2 };
+    return (devices || [])
+      .map((d) => {
+        const placa = placaDoDevice(d);
+        const moto = (motos || []).find((m) => placaLimpa(m.placa) === placaLimpa(placa));
+        const cliente = moto?.contratoAtual ? (clientes || []).find((c) => c.id === moto.contratoAtual.clienteId) : null;
+        const status = statusDoDevice(d);
+        return {
+          chave: String(d.id),
+          device: d,
+          placa,
+          moto,
+          cliente,
+          status,
+          velocidade: Math.round(Number(d.speed) || 0),
+          quando: haQuantoTempo(dataDoDevice(d)),
+          local: localDoDevice(d),
+        };
+      })
+      .sort((a, b) => (peso[a.status] - peso[b.status]) || a.placa.localeCompare(b.placa));
+  }, [devices, motos, clientes]);
+
+  const contagem = {
+    todas: linhas.length,
+    movimento: linhas.filter((l) => l.status === "movimento").length,
+    parada: linhas.filter((l) => l.status === "parada").length,
+    offline: linhas.filter((l) => l.status === "offline").length,
+    // rastreador que não bate com nenhuma placa da Frota — é o que explica a conta
+    // "11 rastreadores, 10 motos" sem parecer defeito
+    semMoto: linhas.filter((l) => !l.moto).length,
+  };
+
+  const q = semAcento(busca.trim());
+  const filtradas = linhas.filter(
+    (l) =>
+      (filtro === "todas" || l.status === filtro) &&
+      (!q || semAcento(`${l.placa} ${l.cliente?.nome || ""} ${l.local} ${l.moto?.modelo || ""}`).includes(q))
+  );
+  const escolhida = linhas.find((l) => l.chave === selecionado) || null;
+
+  const escolher = (chave) => {
+    setSelecionado(chave);
+    mapaRef.current?.focar(chave);
+  };
+
+  const exportarRelatorio = () => {
+    const cab = [["Placa", "Cliente", "Situação", "Velocidade (km/h)", "Último sinal", "Onde está"]];
+    linhas.forEach((l) => cab.push([formatPlaca(l.placa), l.cliente?.nome || "", RASTREIO_STATUS_ROTULO[l.status], String(l.velocidade), l.quando, l.local]));
+    const csv = cab.map((linha) => linha.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rastreio-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const filtros = [
+    { id: "todas", label: "Todas", n: contagem.todas },
+    { id: "movimento", label: "Movimento", n: contagem.movimento },
+    { id: "parada", label: "Paradas", n: contagem.parada },
+    { id: "offline", label: "Sem sinal", n: contagem.offline },
+  ];
+
+  return (
+    <div className="mbr-rastreio">
+      {/* BARRA DE CIMA — o resumo da frota e as ações da tela */}
+      <div className="mbr-rastreio-topo">
+        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>Rastreio</h1>
+        <div className="flex items-center flex-wrap" style={{ gap: 16, fontSize: 12.5 }}>
+          {[
+            { k: "movimento", texto: `${contagem.movimento} em movimento` },
+            { k: "parada", texto: `${contagem.parada} parada${contagem.parada === 1 ? "" : "s"}` },
+            { k: "offline", texto: `${contagem.offline} sem sinal` },
+          ].map(({ k, texto }) => (
+            <span key={k} className="flex items-center" style={{ gap: 7, color: RASTREIO_STATUS_TOM[k].cor, fontWeight: 600 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[k].cor }} />
+              {texto}
+            </span>
+          ))}
+          {contagem.semMoto > 0 && (
+            <span
+              className="flex items-center"
+              title="Rastreador que não bate com nenhuma placa cadastrada na Frota. Confira a placa lá na Melocaliza ou cadastre a moto"
+              style={{ gap: 7, color: "var(--rd-text-dim)", fontWeight: 600 }}
+            >
+              <AlertTriangle size={13} />
+              {contagem.semMoto} sem moto cadastrada
+            </span>
+          )}
+        </div>
+        <div className="flex items-center" style={{ gap: 10, marginLeft: "auto" }}>
+          <span
+            className="flex items-center"
+            style={{ gap: 7, fontSize: 12, color: "var(--rd-text-dim)", background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 999, padding: "7px 14px" }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: 999, background: atualizadoEm ? "var(--rd-positive)" : "var(--rd-text-faint)" }} />
+            {atualizadoEm ? `atualizado ${haQuantoTempo(new Date(atualizadoEm))}` : "carregando..."}
+          </span>
+          <button
+            onClick={() => mapaRef.current?.atualizar()}
+            aria-label="Atualizar agora"
+            title="Atualizar agora"
+            className="flex items-center justify-center mbr-hover-grow"
+            style={{ width: 34, height: 34, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+          >
+            <RefreshCw size={15} strokeWidth={2.5} />
+          </button>
+          <button
+            onClick={() => setRelatorio(true)}
+            className="flex items-center"
+            style={{ gap: 8, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "9px 17px", fontSize: 13, fontWeight: 700 }}
+          >
+            <Route size={15} strokeWidth={2.75} /> Relatório do dia
+          </button>
+        </div>
+      </div>
+
+      <div className="mbr-rastreio-corpo">
+        {/* LISTA */}
+        <div className="mbr-rastreio-lista">
+          <div style={{ padding: "14px 16px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="relative">
+              <Search size={14} strokeWidth={2.75} style={{ position: "absolute", left: 13, top: 11, color: "var(--rd-text-faint)" }} />
+              <input
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                placeholder="Placa, cliente ou cidade"
+                style={{
+                  width: "100%",
+                  background: "var(--rd-surface-2)",
+                  border: "1px solid var(--rd-border)",
+                  borderRadius: 12,
+                  padding: "9px 12px 9px 34px",
+                  color: "var(--rd-text)",
+                  fontSize: 13,
+                  fontFamily: "var(--rd-font)" }}
+              />
+            </div>
+            <div className="mbr-filtros" style={{ minWidth: 0 }}>
+              {filtros.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setFiltro(f.id)}
+                  style={{
+                    padding: "5px 12px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: filtro === f.id ? 700 : 600,
+                    whiteSpace: "nowrap",
+                    background: filtro === f.id ? "var(--rd-brand)" : "transparent",
+                    color: filtro === f.id ? "#F0F5EE" : "var(--rd-text-dim)" }}
+                >
+                  {f.label} {f.n > 0 ? f.n : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            {filtradas.length === 0 ? (
+              <div style={{ padding: "18px 16px", fontSize: 12.5, color: "var(--rd-text-muted)" }}>
+                {devices.length === 0 ? "Carregando os rastreadores..." : "Nenhuma moto com esse filtro."}
+              </div>
+            ) : (
+              filtradas.map((l) => {
+                const ativa = l.chave === selecionado;
+                return (
+                  <button
+                    key={l.chave}
+                    onClick={() => escolher(l.chave)}
+                    className="w-full text-left"
+                    style={{
+                      display: "block",
+                      padding: "12px 16px",
+                      borderTop: "1px solid var(--rd-row-border)",
+                      borderLeft: `2px solid ${ativa ? "var(--rd-brand-light)" : "transparent"}`,
+                      background: ativa ? "var(--rd-surface)" : "transparent" }}
+                  >
+                    <div className="flex items-center" style={{ gap: 9 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[l.status].cor, flex: "none" }} />
+                      <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13.5, fontWeight: 600, color: "var(--rd-text)" }}>
+                        {formatPlaca(l.placa)}
+                      </span>
+                      <ChipStatus status={l.status} pequeno />
+                      <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: l.status === "movimento" ? "var(--rd-text)" : "var(--rd-text-dim)", whiteSpace: "nowrap" }}>
+                        {l.velocidade} km/h
+                      </span>
+                    </div>
+                    <div className="flex items-baseline" style={{ gap: 10, marginTop: 4 }}>
+                      <span className="truncate" style={{ fontSize: 12.5, color: "var(--rd-text-muted)", minWidth: 0 }}>
+                        {l.cliente?.nome || (l.moto ? "sem contrato" : "moto não cadastrada")}
+                      </span>
+                      <span style={{ marginLeft: "auto", fontSize: 11.5, color: "var(--rd-text-faint)", whiteSpace: "nowrap" }}>{l.quando}</span>
+                    </div>
+                    {l.local && (
+                      <div className="flex items-center" style={{ gap: 5, marginTop: 3 }}>
+                        <MapPin size={11} color="var(--rd-text-faint)" style={{ flex: "none" }} />
+                        <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)", minWidth: 0 }}>{l.local}</span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* MAPA */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            position: "relative",
+            // no celular o cabeçalho e a barra de navegação flutuam por cima do mapa:
+            // os controles e o cartão se afastam deles por essas medidas
+            "--mbr-top-rastreio": `${topInset}px`,
+            "--mbr-bottom-rastreio": `${bottomInset}px` }}
+        >
+          <TrackingMap
+            ref={mapaRef}
+            link={link}
+            height="100%"
+            rounded={false}
+            motos={motos}
+            clientes={clientes}
+            topInset={topInset}
+            bottomInset={bottomInset}
+            semControles
+            onDevices={receberDevices}
+            onSelecionar={(chave) => setSelecionado(chave)}
+            selecionadoId={selecionado}
+          />
+
+          <div className="mbr-rastreio-ferramentas flex items-center flex-wrap" style={{ gap: 8 }}>
+            {[
+              { label: "Centralizar frota", icone: Crosshair, acao: () => mapaRef.current?.centralizar(), ativo: false },
+              { label: "Satélite", icone: Landmark, acao: () => { mapaRef.current?.alternarSatelite(); setSatelite((v) => !v); }, ativo: satelite },
+              { label: "Mostrar rastro", icone: Route, acao: () => { mapaRef.current?.alternarRastro(); setRastro((v) => !v); }, ativo: rastro },
+            ].map((b) => (
+              <button
+                key={b.label}
+                onClick={b.acao}
+                className="flex items-center"
+                style={{
+                  gap: 8,
+                  borderRadius: 999,
+                  padding: "8px 15px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  background: b.ativo ? "var(--rd-brand)" : hexToRgba("#0E1512", 0.86),
+                  border: `1px solid ${b.ativo ? "var(--rd-brand)" : "var(--rd-border)"}`,
+                  color: b.ativo ? "var(--rd-brand-light)" : "var(--rd-text)",
+                  backdropFilter: "blur(6px)" }}
+              >
+                <b.icone size={14} strokeWidth={2.5} /> {b.label}
+              </button>
+            ))}
+          </div>
+
+          {/* CARTÃO DA MOTO ESCOLHIDA */}
+          {escolhida && (
+            <div className="mbr-rastreio-cartao mbr-fade-in">
+              <div className="flex items-center" style={{ gap: 9, marginBottom: 10 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[escolhida.status].cor, flex: "none" }} />
+                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 15, fontWeight: 700, color: "var(--rd-text)" }}>
+                  {formatPlaca(escolhida.placa)}
+                </span>
+                <ChipStatus status={escolhida.status} />
+                <button
+                  onClick={() => setSelecionado(null)}
+                  aria-label="Fechar"
+                  className="flex items-center justify-center"
+                  style={{ marginLeft: "auto", width: 28, height: 28, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)" }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--rd-text)", marginBottom: 10 }}>
+                {escolhida.cliente?.nome || (escolhida.moto ? "Sem contrato" : "Moto não cadastrada")}
+              </div>
+
+              {escolhida.local && (
+                <div
+                  className="flex items-start"
+                  style={{ gap: 9, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}
+                >
+                  <MapPin size={14} color="var(--rd-text-muted)" style={{ flex: "none", marginTop: 1 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, color: "var(--rd-text)" }}>{escolhida.local}</div>
+                    {escolhida.moto?.modelo && <div style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>{escolhida.moto.modelo}</div>}
+                  </div>
+                </div>
+              )}
+
+              <div className="mbr-rastreio-stats" style={{ marginBottom: 10 }}>
+                {[
+                  { rotulo: "Velocidade", valor: `${escolhida.velocidade} km/h` },
+                  { rotulo: "Último sinal", valor: escolhida.quando || "" },
+                  { rotulo: "Rodou hoje", valor: kmDoDevice(escolhida.device) },
+                ].map((n) => (
+                  <div key={n.rotulo}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--rd-text-faint)", marginBottom: 3 }}>
+                      {n.rotulo}
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--rd-text)", whiteSpace: "nowrap" }}>{n.valor}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center" style={{ gap: 8 }}>
+                <button
+                  onClick={() => { mapaRef.current?.alternarRastro(); setRastro((v) => !v); }}
+                  className="flex items-center justify-center"
+                  style={{ flex: 1, gap: 7, borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 700, background: rastro ? "var(--rd-brand)" : "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: rastro ? "var(--rd-brand-light)" : "var(--rd-text)" }}
+                >
+                  <Route size={13} /> Trajeto
+                </button>
+                {escolhida.moto && (
+                  <button
+                    onClick={() => onAbrirMoto?.(escolhida.moto.id)}
+                    className="flex items-center justify-center"
+                    style={{ flex: 1, gap: 7, borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 700, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text)" }}
+                  >
+                    <FileText size={13} /> Ficha
+                  </button>
+                )}
+                {escolhida.cliente?.telefone && (
+                  <a
+                    href={`tel:${(escolhida.cliente.telefone || "").replace(/\D/g, "")}`}
+                    aria-label={`Ligar para ${escolhida.cliente.nome}`}
+                    title={`Ligar para ${escolhida.cliente.nome}`}
+                    className="flex items-center justify-center flex-none"
+                    style={{ width: 40, height: 40, borderRadius: 999, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text)" }}
+                  >
+                    <Phone size={14} />
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* LEGENDA */}
+          <div className="mbr-rastreio-legenda flex items-center" style={{ gap: 16 }}>
+            {["movimento", "parada", "offline"].map((k) => (
+              <span key={k} className="flex items-center" style={{ gap: 7, fontSize: 11.5, color: "var(--rd-text-muted)" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[k].cor }} />
+                {RASTREIO_STATUS_ROTULO[k]}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {relatorio && (
+        <Modal title={`Relatório do dia · ${formatDate(todayISO())}`} onClose={() => setRelatorio(false)}>
+          <div className="flex items-center flex-wrap" style={{ gap: 14, marginBottom: "var(--rd-s4)", fontSize: 12.5 }}>
+            {["movimento", "parada", "offline"].map((k) => (
+              <span key={k} className="flex items-center" style={{ gap: 7, color: RASTREIO_STATUS_TOM[k].cor, fontWeight: 600 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[k].cor }} />
+                {contagem[k === "movimento" ? "movimento" : k]} {RASTREIO_STATUS_ROTULO[k].toLowerCase()}
+              </span>
+            ))}
+          </div>
+          <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+            {linhas.map((l) => (
+              <div key={l.chave} className="flex items-center" style={{ gap: 10, padding: "9px 0", borderTop: "1px solid var(--rd-row-border)" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: RASTREIO_STATUS_TOM[l.status].cor, flex: "none" }} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 12.5, fontWeight: 600, color: "var(--rd-text)" }}>{formatPlaca(l.placa)}</div>
+                  <div className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-faint)" }}>
+                    {l.cliente?.nome ? `${l.cliente.nome} · ` : ""}
+                    {l.local}
+                  </div>
+                </div>
+                <span style={{ fontSize: 12, color: "var(--rd-text-muted)", whiteSpace: "nowrap" }}>{l.velocidade} km/h</span>
+                <span style={{ fontSize: 11.5, color: "var(--rd-text-faint)", whiteSpace: "nowrap" }}>{l.quando}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={exportarRelatorio}
+            className="flex items-center justify-center w-full"
+            style={{ gap: 8, marginTop: "var(--rd-s4)", borderRadius: 12, padding: "11px 14px", fontSize: 13, fontWeight: 700, background: "var(--rd-brand-soft)", color: "var(--rd-shell)" }}
+          >
+            <Download size={14} strokeWidth={2.5} /> Baixar em CSV
+          </button>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -6006,8 +8458,7 @@ function SeletorNivel({ value, onChange }) {
             className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left"
             style={{
               background: ativo ? `${theme.mint}1F` : theme.card2,
-              border: `1px solid ${ativo ? theme.mint : theme.cardBorder}`,
-            }}
+              border: `1px solid ${ativo ? theme.mint : theme.cardBorder}` }}
           >
             <Icon size={16} color={ativo ? theme.mint : theme.textMuted} />
             <div className="min-w-0">
@@ -6040,7 +8491,7 @@ function NovoUsuarioModal({ onClose, onSaved }) {
       return;
     }
     if (pareceEmail) {
-      setErro("O usuário não pode ser um email — use só um nome ou apelido, sem @.");
+      setErro("O usuário não pode ser um email. Use só um nome ou apelido, sem @.");
       return;
     }
     if (senha !== confirmar) {
@@ -6064,7 +8515,7 @@ function NovoUsuarioModal({ onClose, onSaved }) {
       <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
       {pareceEmail && (
         <div className="text-xs mb-3 -mt-2 flex items-center gap-1" style={{ color: theme.amber, fontFamily: BODY_FONT }}>
-          <AlertTriangle size={13} /> Isso parece um email — use só um nome ou apelido, sem @.
+          <AlertTriangle size={13} /> Isso parece um email. Use só um nome ou apelido, sem @.
         </div>
       )}
       <CampoSenha label="Senha (mínimo 6 caracteres)" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
@@ -6080,7 +8531,7 @@ function NovoUsuarioModal({ onClose, onSaved }) {
         onClick={salvar}
         disabled={enviando}
         className="w-full rounded-xl py-2 font-semibold"
-        style={{ background: theme.mint, color: theme.text, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
+        style={{ background: theme.mint, color: theme.mintText, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
       >
         {enviando ? "Criando..." : "Criar usuário"}
       </button>
@@ -6115,7 +8566,7 @@ function RedefinirSenhaModal({ usuario, onClose, onSaved }) {
   };
 
   return (
-    <Modal title={`Redefinir senha — ${usuario.username}`} onClose={onClose}>
+    <Modal title={`Redefinir senha · ${usuario.username}`} onClose={onClose}>
       <CampoSenha label="Nova senha (mínimo 6 caracteres)" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
       <CampoSenha label="Confirmar nova senha" value={confirmar} onChange={(e) => setConfirmar(e.target.value)} autoComplete="new-password" />
       {erro && (
@@ -6127,7 +8578,7 @@ function RedefinirSenhaModal({ usuario, onClose, onSaved }) {
         onClick={salvar}
         disabled={enviando}
         className="w-full rounded-xl py-2 font-semibold"
-        style={{ background: theme.mint, color: theme.text, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
+        style={{ background: theme.mint, color: theme.mintText, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
       >
         {enviando ? "Salvando..." : "Salvar nova senha"}
       </button>
@@ -6141,14 +8592,13 @@ function RedefinirSenhaModal({ usuario, onClose, onSaved }) {
 // leitura, sem senha nenhuma nela) e se dispara as ações
 // um único visual pra qualquer badge de cargo/status — fundo sólido igual pra todos,
 // só a cor do texto/ícone muda por tipo (nunca contorno, nunca fundo diferente)
-function CargoBadge({ icon: Icon, children, color }) {
+function RdBadge({ cor, children }) {
   return (
     <span
-      className="text-xs font-semibold rounded-full px-2 py-0.5 flex items-center gap-1 flex-shrink-0"
-      style={{ background: theme.card2, color, lineHeight: 1 }}
+      className="flex-shrink-0"
+      style={{ fontSize: 11, fontWeight: 700, color: cor, background: "var(--rd-surface)", border: `1px solid ${cor}`, borderRadius: 999, padding: "2px 8px", lineHeight: 1.4 }}
     >
-      {Icon && <Icon size={11} style={{ display: "block", flexShrink: 0 }} />}
-      <span>{children}</span>
+      {children}
     </span>
   );
 }
@@ -6194,20 +8644,20 @@ function UsuariosSection({ meuId }) {
   };
 
   return (
-    <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-      <div className="flex items-center justify-between mb-3">
-        <FieldLabel>Usuários com acesso</FieldLabel>
+    <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "22px 24px" }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+        <span style={RD_LABEL}>Usuários com acesso</span>
         <button
           onClick={() => setModal({ type: "novo" })}
-          className="text-xs font-semibold rounded-xl px-3 py-1.5 flex items-center gap-1"
-          style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
+          className="flex items-center"
+          style={{ gap: 6, background: "var(--rd-brand-soft)", color: "var(--rd-shell)", borderRadius: 999, padding: "7px 14px", fontSize: 12.5, fontWeight: 700 }}
         >
-          <Plus size={14} /> Novo usuário
+          <Plus size={14} strokeWidth={3} /> Novo usuário
         </button>
       </div>
 
       {erro && (
-        <div className="text-xs mb-3 flex items-center gap-1" style={{ color: theme.coral, fontFamily: BODY_FONT }}>
+        <div className="flex items-center" style={{ gap: 6, fontSize: 12.5, color: "var(--rd-negative)", marginBottom: 12 }}>
           <AlertTriangle size={13} /> {erro}
         </div>
       )}
@@ -6215,30 +8665,32 @@ function UsuariosSection({ meuId }) {
       {usuarios === null ? (
         <div className="mbr-skel" style={{ height: 60 }} />
       ) : usuarios.length === 0 ? (
-        <div style={{ color: theme.textMuted, fontSize: 12 }}>Nenhum usuário cadastrado.</div>
+        <div style={{ color: "var(--rd-text-dim)", fontSize: 12.5 }}>Nenhum usuário cadastrado.</div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col" style={{ gap: 8 }}>
           {usuarios.map((u) => (
-            <div key={u.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-2" style={{ background: theme.card2 }}>
-              <div className="flex items-center gap-2 min-w-0">
-                <div style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }} className="truncate">
+            <div
+              key={u.id}
+              className="flex items-center justify-between flex-wrap"
+              style={{ gap: 8, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", borderRadius: 12, padding: "9px 12px" }}
+            >
+              <div className="flex items-center min-w-0" style={{ gap: 8 }}>
+                <span className="truncate" style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 13.5 }}>
                   {u.username}
-                </div>
+                </span>
                 {u.role === "admin" ? (
-                  <CargoBadge icon={ShieldCheck} color={theme.amber}>Admin</CargoBadge>
+                  <RdBadge cor="var(--rd-attention)">Admin</RdBadge>
                 ) : (
-                  <CargoBadge icon={u.role === "editor" ? Pencil : Eye} color={u.role === "editor" ? theme.mint : theme.textMuted}>
-                    {u.role === "editor" ? "Editor" : "Visualizador"}
-                  </CargoBadge>
+                  <RdBadge cor={u.role === "editor" ? "var(--rd-brand-light)" : "var(--rd-text-dim)"}>{u.role === "editor" ? "Editor" : "Visualizador"}</RdBadge>
                 )}
-                {!u.ativo && <CargoBadge color={theme.coral}>Desativado</CargoBadge>}
+                {!u.ativo && <RdBadge cor="var(--rd-negative)">Desativado</RdBadge>}
               </div>
-              <div className="flex items-center flex-shrink-0" style={{ marginRight: -10 }}>
+              <div className="flex items-center flex-shrink-0" style={{ marginRight: -8 }}>
                 {u.role !== "admin" && (
                   <button
                     onClick={() => alternarRole(u)}
                     className="flex items-center justify-center mbr-hover-grow"
-                    style={{ color: theme.textMuted, width: 40, height: 40 }}
+                    style={{ color: "var(--rd-text-muted)", width: 36, height: 36 }}
                     title={u.role === "editor" ? "Trocar pra Visualizador" : "Trocar pra Editor"}
                   >
                     {u.role === "editor" ? <Eye size={15} /> : <Pencil size={15} />}
@@ -6247,7 +8699,7 @@ function UsuariosSection({ meuId }) {
                 <button
                   onClick={() => setModal({ type: "senha", usuario: u })}
                   className="flex items-center justify-center mbr-hover-grow"
-                  style={{ color: theme.textMuted, width: 40, height: 40 }}
+                  style={{ color: "var(--rd-text-muted)", width: 36, height: 36 }}
                   title="Redefinir senha"
                 >
                   <KeyRound size={15} />
@@ -6256,7 +8708,7 @@ function UsuariosSection({ meuId }) {
                   <button
                     onClick={() => excluirUsuario(u)}
                     className="flex items-center justify-center mbr-hover-grow"
-                    style={{ color: theme.textMuted, width: 40, height: 40, marginRight: -8 }}
+                    style={{ color: "var(--rd-text-muted)", width: 36, height: 36 }}
                     title="Excluir usuário"
                   >
                     <Trash2 size={15} />
@@ -6284,16 +8736,76 @@ function UsuariosSection({ meuId }) {
   );
 }
 
-function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
+// troca a própria senha (qualquer nível de acesso) — ao contrário de "Usuários",
+// que só existe pra admin mexer em login alheio
+function MinhaSenhaCard() {
+  const [senha, setSenha] = useState("");
+  const [confirmar, setConfirmar] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ok, setOk] = useState(false);
+
+  const salvar = async () => {
+    if (senha.length < 6) {
+      setErro("A senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (senha !== confirmar) {
+      setErro("As senhas não são iguais.");
+      return;
+    }
+    setEnviando(true);
+    setErro("");
+    const resultado = await alterarMinhaSenha(senha);
+    setEnviando(false);
+    if (!resultado.ok) {
+      setErro(resultado.erro);
+      return;
+    }
+    setSenha("");
+    setConfirmar("");
+    setOk(true);
+    setTimeout(() => setOk(false), 2500);
+  };
+
+  return (
+    <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "22px 24px" }}>
+      <span style={RD_LABEL}>Minha senha</span>
+      <div style={{ marginTop: 10 }}>
+        <CampoSenha label="Nova senha (mínimo 6 caracteres)" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
+        <CampoSenha label="Confirmar nova senha" value={confirmar} onChange={(e) => setConfirmar(e.target.value)} autoComplete="new-password" />
+      </div>
+      {erro && (
+        <div className="text-xs mb-3 flex items-center gap-1" style={{ color: "var(--rd-negative)", fontFamily: "var(--rd-font)" }}>
+          <AlertTriangle size={13} /> {erro}
+        </div>
+      )}
+      {ok && (
+        <div className="text-xs mb-3 flex items-center gap-1" style={{ color: "var(--rd-positive)", fontFamily: "var(--rd-font)" }}>
+          <CheckCircle2 size={13} /> Senha trocada.
+        </div>
+      )}
+      <button
+        onClick={salvar}
+        disabled={enviando || !senha}
+        className="rounded-xl"
+        style={{ background: "var(--rd-brand-soft)", color: "var(--rd-shell)", fontWeight: 700, fontSize: 13, padding: "9px 18px", opacity: enviando || !senha ? 0.6 : 1 }}
+      >
+        {enviando ? "Salvando..." : "Salvar nova senha"}
+      </button>
+    </div>
+  );
+}
+
+function ConfiguracoesView({ config, persist, perfil, onSignOut, motos, clientes, lancamentos, futuros }) {
   const [local, setLocal] = useState(config);
   const [status, setStatus] = useState({ text: "", kind: "" }); // kind: "ok" | "erro" | ""
-  const logoInputRef = useRef(null);
 
   // se outra pessoa (ex. seu pai) mudar as configurações, reflete aqui
   useEffect(() => {
     setLocal(config);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.logoDataUrl, config.logoSize, config.linkRastreioGeral]);
+  }, [config.linkRastreioGeral]);
 
   const salvarAgora = async (next) => {
     setStatus({ text: "Salvando...", kind: "" });
@@ -6302,146 +8814,99 @@ function ConfiguracoesView({ config, persist, perfil, onSignOut }) {
     setTimeout(() => setStatus({ text: "", kind: "" }), 1800);
   };
 
-  const handleLogo = (e) => {
-    const file = e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setStatus({ text: "Imagem acima de 5MB — tente uma versão menor.", kind: "erro" });
-      return;
-    }
-    setStatus({ text: "Enviando logo...", kind: "" });
-    (async () => {
-      const url = await uploadArquivo(`logo-${Date.now()}-${nomeArquivoSeguro(file.name)}`, file);
-      if (!url) {
-        setStatus({ text: "Não foi possível enviar a logo agora.", kind: "erro" });
-        return;
-      }
-      const next = { ...local, logoDataUrl: url, logoName: file.name };
-      setLocal(next);
-      await persist(next);
-      setStatus({ text: "Logo salva ✓", kind: "ok" });
-      setTimeout(() => setStatus({ text: "", kind: "" }), 1800);
-    })();
-  };
-
-  const removerLogo = () => {
-    const next = { ...local, logoDataUrl: "", logoName: "" };
-    setLocal(next);
-    salvarAgora(next);
+  // backup completo — motos, clientes, caixa e agendamentos num JSON só, pra guardar
+  // fora do site (o banco não tem histórico de versões: um erro em massa não volta atrás)
+  const baixarBackup = () => {
+    const dados = { geradoEm: new Date().toISOString(), motos, clientes, lancamentos, futuros };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(dados, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mobirelli-backup-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div>
-      <h2 style={{ fontFamily: HEAD_FONT, fontSize: 22, fontWeight: 700, color: theme.mint }} className="mb-4">
-        Configurações
-      </h2>
+    <div className="flex flex-col" style={{ gap: 14, fontFamily: "var(--rd-font)" }}>
+      <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>Ajustes</h1>
 
-      <div className="rounded-2xl p-4 mb-4 flex items-center justify-between gap-3" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
+      <div
+        className="rounded-2xl flex items-center justify-between flex-wrap"
+        style={{ gap: 12, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "16px 20px" }}
+      >
         <div className="min-w-0">
-          <div style={{ color: theme.textMuted, fontFamily: BODY_FONT, fontSize: 12 }}>Logado como</div>
-          <div className="flex items-center gap-1.5 truncate" style={{ color: theme.text, fontFamily: BODY_FONT, fontWeight: 600 }}>
+          <div style={{ color: "var(--rd-text-dim)", fontSize: 12 }}>Logado como</div>
+          <div className="flex items-center truncate" style={{ gap: 6, color: "var(--rd-text)", fontWeight: 600, fontSize: 14.5 }}>
             {perfil?.username}
-            {perfil?.role === "admin" && <ShieldCheck size={14} color={theme.amber} />}
+            {perfil?.role === "admin" && <ShieldCheck size={14} color="var(--rd-attention)" />}
           </div>
         </div>
         <button
           onClick={onSignOut}
-          className="text-xs font-semibold rounded-xl px-3 py-2 flex items-center gap-1.5 flex-shrink-0"
-          style={{ background: theme.card2, color: theme.coral }}
+          className="flex items-center flex-shrink-0"
+          style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-negative)", borderRadius: 999, padding: "9px 16px", fontSize: 12.5, fontWeight: 700 }}
         >
           <LogOut size={14} /> Sair
+        </button>
+      </div>
+
+      <MinhaSenhaCard />
+
+      <div className="rounded-2xl flex items-center justify-between flex-wrap" style={{ gap: 12, background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "16px 20px" }}>
+        <div className="min-w-0">
+          <div style={{ color: "var(--rd-text)", fontWeight: 600, fontSize: 14.5 }}>Backup dos dados</div>
+          <div style={{ color: "var(--rd-text-dim)", fontSize: 12 }}>
+            Baixa motos, clientes, caixa e agendamentos num arquivo só, pra guardar fora do site.
+          </div>
+        </div>
+        <button
+          onClick={baixarBackup}
+          className="flex items-center flex-shrink-0"
+          style={{ gap: 7, background: "var(--rd-surface-2)", border: "1px solid var(--rd-border)", color: "var(--rd-text-muted)", borderRadius: 999, padding: "9px 16px", fontSize: 12.5, fontWeight: 700 }}
+        >
+          <Download size={14} /> Baixar backup
         </button>
       </div>
 
       {perfil?.role === "admin" && <UsuariosSection meuId={perfil.id} />}
 
       {permissoes.podeEditar && (
-      <>
-      <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-        <FieldLabel>Logo da empresa</FieldLabel>
-        <div className="flex items-center gap-3 mb-2">
-          <div
-            className="flex items-center justify-center rounded-xl"
-            style={{ width: 64, height: 64, background: theme.bg, border: `1px solid ${theme.cardBorder}` }}
-          >
-            {local.logoDataUrl ? (
-              <img src={local.logoDataUrl} alt="Logo atual" style={{ maxWidth: 56, maxHeight: 56 }} />
-            ) : (
-              <ImageIcon size={22} color={theme.textMuted} />
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <input ref={logoInputRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
-            <button
-              type="button"
-              onClick={() => logoInputRef.current?.click()}
-              className="text-xs font-semibold rounded-xl px-3 py-1.5"
-              style={{ background: theme.mint, color: theme.text, fontWeight: 600 }}
-            >
-              Enviar imagem da logo
-            </button>
-            {local.logoDataUrl && (
-              <button type="button" onClick={removerLogo} className="text-xs font-semibold" style={{ color: theme.coral }}>
-                Remover e usar a marca padrão
-              </button>
-            )}
+        <div className="rounded-2xl" style={{ background: "var(--rd-surface)", border: "1px solid var(--rd-border)", padding: "22px 24px" }}>
+          <span style={RD_LABEL}>Link de rastreio (aba Rastreamento)</span>
+          <input
+            style={{
+              width: "100%",
+              background: "var(--rd-surface-2)",
+              border: "1px solid var(--rd-border)",
+              borderRadius: 10,
+              padding: "10px 14px",
+              color: "var(--rd-text)",
+              fontSize: 13.5,
+              fontFamily: "var(--rd-font)",
+              marginTop: 10,
+              marginBottom: 8 }}
+            value={local.linkRastreioGeral || ""}
+            onChange={(e) => setLocal((l) => ({ ...l, linkRastreioGeral: e.target.value }))}
+            onBlur={() => salvarAgora(local)}
+            placeholder="https://web.melocaliza.com.br/sharing/..."
+          />
+          <div style={{ fontSize: 12, color: "var(--rd-text-dim)" }}>
+            Na Melocaliza: Compartilhar localização → Novo → selecione todas as motos → validade "Nenhum" → copie o link.
           </div>
         </div>
-        <div className="text-xs mb-3" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          PNG com fundo transparente funciona melhor. Até 5MB.
-        </div>
-
-        {local.logoDataUrl && (
-          <div className="pt-3" style={{ borderTop: `1px solid ${theme.divider}` }}>
-            <div className="flex items-center justify-between mb-1.5">
-              <span style={{ color: theme.text, fontFamily: BODY_FONT, fontSize: 13, fontWeight: 600 }}>
-                Tamanho da logo no topo
-              </span>
-              <span style={{ color: theme.textMuted, fontFamily: BODY_FONT, fontSize: 12 }}>
-                {local.logoSize || 38}px
-              </span>
-            </div>
-            <input
-              type="range"
-              min={24}
-              max={90}
-              step={2}
-              value={local.logoSize || 38}
-              onChange={(e) => setLocal((l) => ({ ...l, logoSize: Number(e.target.value) }))}
-              onMouseUp={() => salvarAgora({ ...local })}
-              onTouchEnd={() => salvarAgora({ ...local })}
-              style={{ width: "100%", accentColor: theme.mint }}
-            />
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-2xl p-4 mb-4" style={{ background: theme.card, border: `1px solid ${theme.cardBorder}` }}>
-        <FieldLabel>Link de rastreio (aba Rastreio)</FieldLabel>
-        <input
-          style={inputStyle}
-          value={local.linkRastreioGeral || ""}
-          onChange={(e) => setLocal((l) => ({ ...l, linkRastreioGeral: e.target.value }))}
-          onBlur={() => salvarAgora(local)}
-          placeholder="https://web.melocaliza.com.br/sharing/..."
-        />
-        <div className="text-xs -mt-2" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Na Melocaliza: Compartilhar localização → Novo → selecione todas as motos → validade "Nenhum" → copie o link.
-        </div>
-      </div>
-
-      </>
       )}
 
       {status.text && (
         <div
-          className="text-xs font-semibold rounded-xl px-3 py-2 inline-block"
+          className="inline-block"
           style={{
-            color: status.kind === "erro" ? theme.coral : theme.mint,
-            background: status.kind === "erro" ? `${theme.coral}1F` : `${theme.mint}1F`,
-            fontFamily: BODY_FONT,
-          }}
+            fontSize: 12.5,
+            fontWeight: 700,
+            borderRadius: 999,
+            padding: "7px 14px",
+            alignSelf: "flex-start",
+            color: status.kind === "erro" ? "var(--rd-negative)" : "var(--rd-positive)",
+            background: status.kind === "erro" ? "var(--rd-attention-bg)" : "#132018" }}
         >
           {status.text}
         </div>
@@ -6639,7 +9104,7 @@ function LoginView() {
           type="submit"
           disabled={enviando}
           className="w-full rounded-xl py-2.5 font-semibold"
-          style={{ background: theme.mint, color: theme.text, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
+          style={{ background: theme.mint, color: theme.mintText, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
         >
           {enviando ? "Entrando..." : "Entrar"}
         </button>
@@ -6686,7 +9151,7 @@ function CriarAdminView() {
           Criar administrador
         </h2>
         <div className="text-center text-xs mb-4" style={{ color: theme.textMuted, fontFamily: BODY_FONT }}>
-          Primeiro acesso ao sistema — essa conta vira a administradora. As próximas pessoas só entram com um login criado por ela.
+          Primeiro acesso ao sistema. Essa conta vira a administradora. As próximas pessoas só entram com um login criado por ela.
         </div>
         <FieldLabel>Usuário</FieldLabel>
         <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
@@ -6701,7 +9166,7 @@ function CriarAdminView() {
           type="submit"
           disabled={enviando}
           className="w-full rounded-xl py-2.5 font-semibold"
-          style={{ background: theme.mint, color: theme.text, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
+          style={{ background: theme.mint, color: theme.mintText, fontWeight: 600, opacity: enviando ? 0.7 : 1 }}
         >
           {enviando ? "Criando..." : "Criar administrador"}
         </button>
@@ -6726,17 +9191,18 @@ function AppAutenticado({ perfil, onSignOut }) {
   }, [tab]);
   const headerRef = useRef(null);
   const navRef = useRef(null);
-  const tabSlotRefs = useRef({});
-  const [pilulaRect, setPilulaRect] = useState(null);
   // altura real da barra de cima/baixo — usado no Rastreio pra empurrar os controles
   // do mapa pra fora da faixa que fica por baixo delas (que agora é semitransparente)
   const [chromeHeights, setChromeHeights] = useState({ header: 64, nav: 76 });
 
   useEffect(() => {
     const medir = () => {
+      // "??" e não "||": no desktop as duas barras ficam escondidas e a altura é 0 —
+      // com "||" o 0 caía no palpite inicial (64/76) e os controles do mapa subiam
+      // quase 80px do rodapé, como se a barra de navegação do celular estivesse lá
       setChromeHeights({
-        header: headerRef.current?.offsetHeight || 64,
-        nav: navRef.current?.offsetHeight || 76,
+        header: headerRef.current?.offsetHeight ?? 64,
+        nav: navRef.current?.offsetHeight ?? 76,
       });
     };
     medir();
@@ -6787,156 +9253,658 @@ function AppAutenticado({ perfil, onSignOut }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fluxoState.loading]);
 
+  // "Frota" é a única aba com contador de pendência por enquanto — motos disponíveis
+  // (paradas) são a mesma condição que a Etapa 3 (Visão geral) vai usar na faixa
+  // "Precisa de você"
+  const motosParadas = motosState.items.filter((m) => m.status === "disponivel").length;
+
   const tabs = [
-    { id: "dashboard", label: "Início", icon: LayoutDashboard },
-    { id: "motos", label: "Motos", icon: Bike },
-    { id: "clientes", label: "Clientes", icon: Users },
-    { id: "fluxo", label: "Caixa", icon: Wallet },
-    { id: "rastreio", label: "Rastreio", icon: Navigation },
-    { id: "config", label: "Ajustes", icon: Settings },
+    { id: "dashboard", label: "Visão geral", labelMobile: "Painel", icon: LayoutDashboard },
+    { id: "motos", label: "Frota", labelMobile: "Frota", icon: Bike, pendente: motosParadas > 0 ? motosParadas : null },
+    { id: "clientes", label: "Clientes", labelMobile: "Clientes", icon: Users },
+    { id: "fluxo", label: "Caixa", labelMobile: "Caixa", icon: Wallet },
+    { id: "rastreio", label: "Rastreamento", labelMobile: "Mapa", icon: Navigation },
   ];
-
-  // mede a posição do ícone da aba ativa pra "pílula" verde deslizar até ali (em vez de
-  // simplesmente aparecer/desaparecer em cada aba) — precisa medir de novo sempre que a
-  // aba muda ou a tela redimensiona, já que os botões são distribuídos com flex
+  // MENU RECOLHÍVEL — a barra lateral come 232px o tempo todo; recolhida ela vira um
+  // trilho fino só de ícones (continua navegável) e devolve esse espaço pro conteúdo.
+  // A regra é por tela: a Visão geral abre com o menu aberto (é o ponto de partida,
+  // dá pra ver pra onde ir); entrar em qualquer outra aba joga a tela pro modo cheio.
+  // Dentro da aba o botão continua valendo — a regra só volta a valer na próxima troca.
+  // "Abrir a ficha" no mapa: guarda qual moto abrir e troca pra aba Frota
+  const [motoParaAbrir, setMotoParaAbrir] = useState(null);
+  const [menuRecolhido, setMenuRecolhido] = useState(false);
   useEffect(() => {
-    const medir = () => {
-      const slot = tabSlotRefs.current[tab];
-      const navEl = navRef.current;
-      if (!slot || !navEl) return;
-      const slotRect = slot.getBoundingClientRect();
-      const navRect = navEl.getBoundingClientRect();
-      setPilulaRect({ left: slotRect.left - navRect.left, top: slotRect.top - navRect.top, width: slotRect.width, height: slotRect.height });
-    };
-    medir();
-    window.addEventListener("resize", medir);
-    return () => window.removeEventListener("resize", medir);
+    setMenuRecolhido(tab !== "dashboard");
   }, [tab]);
+  const larguraMenu = menuRecolhido ? 62 : 232;
 
-  // arrastar a pílula pro lado troca de aba também, igual num seletor de segmentos do
-  // iOS — guarda o centro de cada aba (medido só uma vez, no início do arrasto) pra achar
-  // qual fica mais perto do dedo quando soltar
-  const dragInfoRef = useRef(null);
-  const dragLeftRef = useRef(null);
-  const [arrastando, setArrastando] = useState(false);
-  const [dragLeft, setDragLeft] = useState(null);
+  // Frota, Clientes e Caixa já desenham o próprio título (com a contagem e os botões
+  // na mesma linha) — o header do shell em cima só repetia a palavra e comia 60px
+  const telaTemTituloProprio = ["motos", "clientes", "fluxo", "rastreio"].includes(tab);
 
-  const iniciarArrasto = (e) => {
-    const navEl = navRef.current;
-    if (!navEl || !pilulaRect) return;
-    const navRect = navEl.getBoundingClientRect();
-    const centros = tabs.map((t) => {
-      const el = tabSlotRefs.current[t.id];
-      const r = el.getBoundingClientRect();
-      return { id: t.id, center: r.left - navRect.left + r.width / 2 };
-    });
-    dragInfoRef.current = { startClientX: e.clientX, startLeft: pilulaRect.left, centros, maxLeft: navRect.width - pilulaRect.width };
-    dragLeftRef.current = pilulaRect.left;
-    setArrastando(true);
-    setDragLeft(pilulaRect.left);
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-
-  const moverArrasto = (e) => {
-    const info = dragInfoRef.current;
-    if (!info) return;
-    const delta = e.clientX - info.startClientX;
-    const novo = Math.max(0, Math.min(info.maxLeft, info.startLeft + delta));
-    dragLeftRef.current = novo;
-    setDragLeft(novo);
-  };
-
-  const soltarArrasto = () => {
-    const info = dragInfoRef.current;
-    if (!info) return;
-    const centroAtual = (dragLeftRef.current ?? info.startLeft) + pilulaRect.width / 2;
-    let maisProximo = info.centros[0];
-    let menorDist = Infinity;
-    info.centros.forEach((c) => {
-      const d = Math.abs(c.center - centroAtual);
-      if (d < menorDist) {
-        menorDist = d;
-        maisProximo = c;
-      }
-    });
-    dragInfoRef.current = null;
-    dragLeftRef.current = null;
-    setDragLeft(null);
-    setArrastando(false);
-    if (maisProximo.id !== tab) setTab(maisProximo.id);
-  };
+  const abaAtual = tabs.find((t) => t.id === tab);
+  const tituloTela = abaAtual ? abaAtual.label : "Ajustes";
+  const dataCabecalho = useMemo(() => {
+    const texto = new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+    return texto.charAt(0).toUpperCase() + texto.slice(1);
+  }, []);
 
   return (
     <div
+      className="mbr-shell"
       style={{
-        backgroundColor: theme.bg,
-        backgroundImage: `radial-gradient(circle at 12% -8%, ${theme.mint}12 0%, transparent 38%), radial-gradient(circle at 50% 115%, ${theme.amber}0A 0%, transparent 36%)`,
-        backgroundAttachment: "fixed",
-        minHeight: "100vh",
-        fontFamily: BODY_FONT,
-      }}
+        background: "var(--rd-bg)",
+        fontFamily: "var(--rd-font)" }}
     >
       <style>{`
         ${fontImport}
         * { -webkit-tap-highlight-color: transparent; }
-        button { transition: opacity 0.15s ease, transform 0.16s ease, filter 0.15s ease; cursor: pointer; }
+        button { transition: opacity 0.15s ease, transform 0.16s ease, filter 0.15s ease; cursor: pointer; border: none; }
         button:active { transform: scale(0.97); opacity: 0.85; }
         .mbr-hover-grow { transform-origin: center; }
         .mbr-tab-icon { transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
         .mbr-card-lift { transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.28s ease; will-change: transform; }
+        .mbr-nav-item { transition: background 0.15s ease, color 0.15s ease; }
         @media (hover: hover) and (pointer: fine) {
           button:hover { filter: brightness(1.22); }
-          nav button:hover { filter: none; transform: translateY(-2px); }
-          nav button:hover span:first-child { background: ${hexToRgba(theme.mint, 0.1)}; }
-          nav button:hover .mbr-tab-icon { transform: scale(1.2) rotate(-6deg); }
+          .mbr-nav-item:hover { filter: none; background: var(--rd-surface); }
+          .mbr-nav-item[data-active="true"]:hover { filter: none; background: var(--rd-brand); }
           .mbr-hover-grow:hover { transform: scale(1.16); filter: brightness(1.28); }
           .mbr-card-lift:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.24); }
         }
-        input, select, textarea, button { font-family: ${BODY_FONT}; }
+        input, select, textarea, button { font-family: var(--rd-font); }
         input:focus, select:focus, textarea:focus, button:focus-visible {
-          outline: 2px solid ${theme.mint}; outline-offset: 1px;
+          outline: 2px solid var(--rd-brand-soft); outline-offset: 2px;
         }
         @media (prefers-reduced-motion: reduce) {
           * { transition: none !important; animation: none !important; }
         }
         @keyframes mbrPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
-        .mbr-skel { animation: mbrPulse 1.3s ease-in-out infinite; border-radius: 10px; background: ${theme.card}; }
+        .mbr-skel { animation: mbrPulse 1.3s ease-in-out infinite; border-radius: 10px; background: var(--rd-surface); }
         @keyframes mbrFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .mbr-fade-in { animation: mbrFadeIn 0.24s ease both; }
         @keyframes mbrRotuloTroca { from { opacity: 0; } to { opacity: 1; } }
         .mbr-rotulo-troca { animation: mbrRotuloTroca 0.22s ease both; animation-delay: 0.08s; }
+
+        /* shell — sidebar fixa ≥1024px, tab bar embaixo <1024px (mobirelli-redesign-spec.md, seção 2) */
+        .mbr-desktop-only { display: none; }
+        .mbr-mobile-only { display: flex; }
+        .mbr-desktop-grid { display: none; }
+        .mbr-main-pad-bottom { padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+        @media (min-width: 1024px) {
+          .mbr-desktop-only { display: flex; }
+          .mbr-mobile-only { display: none; }
+          .mbr-desktop-grid { display: grid; }
+          .mbr-main-pad-bottom { padding-bottom: 12px; }
+        }
+
+        /* -----------------------------------------------------------
+           TABELAS — o cabeçalho e a linha compartilham a MESMA classe de
+           grade e a MESMA calha lateral. Era exatamente isso que faltava:
+           o cabeçalho tinha 4px de calha e a linha 18px, então nenhum
+           rótulo caía em cima da coluna que ele nomeia. O +1px do
+           cabeçalho compensa a borda de 1px do cartão da linha.
+        ----------------------------------------------------------- */
+        .mbr-tab-head {
+          padding: 0 calc(var(--rd-pad-row-x) + 1px) 10px;
+          column-gap: var(--rd-gap-col);
+          border-bottom: 1px solid var(--rd-border-soft);
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: var(--rd-text-faint);
+        }
+        .mbr-tab-row {
+          padding: var(--rd-pad-row-y) var(--rd-pad-row-x);
+          column-gap: var(--rd-gap-col);
+          align-items: center;
+        }
+
+        /* "Onde está" só some no celular, onde a linha vira cartão de qualquer jeito —
+           no tablet deitado ela cabe junto com o resto, como no rascunho */
+        .mbr-col-extra { display: none !important; }
+        @media (min-width: 1024px) {
+          .mbr-col-extra { display: flex !important; }
+        }
+
+        .mbr-grid-frota { grid-template-columns: 112px minmax(0, 1.15fr) 108px 100px minmax(0, 0.9fr) 108px 62px; }
+        @media (min-width: 1280px) {
+          .mbr-grid-frota { grid-template-columns: 116px minmax(0, 1.5fr) 116px 112px minmax(0, 0.95fr) 132px 76px; }
+        }
+        .mbr-grid-clientes { grid-template-columns: minmax(0, 1.15fr) 150px minmax(0, 1fr) 168px 76px; }
+
+        /* grupo de filtros/abas em pílula — no celular quatro pílulas não cabem
+           lado a lado, e como o grupo não encolhia ele empurrava a página inteira
+           pro lado. Aqui ele vira uma faixa que rola sozinha, sem barra à vista */
+        .mbr-filtros {
+          display: flex;
+          gap: 2px;
+          background: var(--rd-surface-2);
+          border: 1px solid var(--rd-border);
+          border-radius: 999px;
+          padding: 4px;
+          max-width: 100%;
+          overflow-x: auto;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+          -webkit-overflow-scrolling: touch;
+        }
+        .mbr-filtros::-webkit-scrollbar { display: none; }
+        .mbr-filtros > button { flex: none; white-space: nowrap; }
+
+        /* COLUNA DE CONTEÚDO — no desktop ela flutua como um painel de canto
+           arredondado sobre o fundo do shell, em vez de encostar nas bordas da tela.
+           No celular continua de ponta a ponta (não sobra largura pra desperdiçar).
+           O arredondamento vai no elemento, não num overflow:hidden, porque
+           overflow em ancestral quebra o position:sticky do cabeçalho. */
+        .mbr-conteudo { background: var(--rd-shell); --mbr-margem-conteudo: 0px; }
+        .mbr-conteudo > div > header:first-of-type,
+        .mbr-conteudo > div > header { border-radius: 0; }
+        @media (min-width: 1024px) {
+          .mbr-conteudo {
+            --mbr-margem-conteudo: 20px;
+            border-radius: 18px;
+            margin: 10px;
+            /* com o painel arredondado à vista, uma tela curta deixava ele terminando no
+               meio do caminho, com o fundo do shell sobrando embaixo */
+            min-height: calc(100vh - 20px);
+            min-height: calc(100dvh - 20px);
+            border: 1px solid var(--rd-border-soft);
+            overflow-x: clip;
+          }
+          .mbr-conteudo > div > header { border-radius: 17px 17px 0 0; }
+        }
+
+        /* TELA TRAVADA — a aba ocupa exatamente a altura da janela e não rola junto
+           com o dedo. "dvh" (e não "vh") é o que faz isso valer no iPad/iPhone: no
+           Safari, 100vh é a altura SEM as barras do navegador, então o rodapé da tela
+           ficava escondido atrás da barra de baixo e a página ainda dava pra arrastar.
+           O "overflow-y: auto" é só válvula de escape pra janela baixa demais —
+           quando cabe (o caso normal), não há o que rolar. */
+        .mbr-tela-fixa {
+          height: calc(100vh - var(--mbr-margem-conteudo, 0px));
+          height: calc(100dvh - var(--mbr-margem-conteudo, 0px));
+          min-height: 0;
+        }
+        @media (min-width: 1024px) {
+          .mbr-tela-fixa-desktop {
+            height: calc(100dvh - var(--mbr-margem-conteudo, 0px));
+            min-height: 0;
+            overflow-y: auto;
+          }
+        }
+
+        /* FICHA EM TELA INTEIRA (moto e cliente) — clicar numa linha troca a lista
+           por essa tela. No desktop ela tem duas colunas: extrato de um lado,
+           resultado/histórico/documentos do outro. No celular vira uma coluna só. */
+        .mbr-detalhe-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: var(--rd-s5);
+          /* "stretch" (e não "start") é o que faz as duas colunas terminarem na mesma
+             linha: a mais curta cresce até a altura da mais alta, e lá dentro um cartão
+             marcado com .mbr-cresce absorve a sobra — em vez de deixar um vão branco */
+          align-items: stretch;
+        }
+        @media (min-width: 1024px) {
+          .mbr-detalhe-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--rd-s5); }
+        }
+        .mbr-cresce { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+        /* lista que rola dentro do cartão: o cabeçalho e o rodapé ficam parados e só as
+           linhas correm — é o que faz o cartão ter sempre a mesma altura, com 5 ou com
+           50 lançamentos */
+        /* no celular a lista corre com a página (rolagem dentro de rolagem em tela
+           pequena é ruim); do tablet deitado pra cima ela rola dentro do cartão */
+        @media (min-width: 1024px) {
+          .mbr-lista-rolante {
+            /* base 0: a lista não "empurra" a altura do cartão, ela recebe o espaço que
+               sobra — é isso que faz o mês de 5 e o de 50 lançamentos medirem igual */
+            flex: 1 1 0;
+            min-height: 160px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: var(--rd-border) transparent;
+            margin-right: -6px;
+            padding-right: 6px;
+          }
+          .mbr-lista-rolante::-webkit-scrollbar { width: 8px; }
+          .mbr-lista-rolante::-webkit-scrollbar-thumb { background: var(--rd-border); border-radius: 999px; }
+          .mbr-lista-rolante::-webkit-scrollbar-track { background: transparent; }
+        }
+
+        /* "Ver mais" — mesma faixa centralizada em toda lista que corta (Caixa e fichas),
+           encostada na última linha, pra não depender do tamanho do vão que sobra */
+        .mbr-ver-mais {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          width: 100%;
+          padding: 11px 0 2px;
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--rd-brand-light);
+          background: none;
+        }
+        .mbr-ver-mais--menos { color: var(--rd-text-dim); }
+
+        /* RASTREIO — barra de cima, lista à esquerda e mapa ocupando o resto. No
+           celular a lista e a barra somem: lá o mapa é a tela inteira, com o cabeçalho
+           flutuante do app por cima (como já era) */
+        .mbr-rastreio { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+        .mbr-rastreio-topo { display: none; }
+        .mbr-rastreio-corpo { flex: 1; min-height: 0; display: flex; }
+        .mbr-rastreio-lista { display: none; }
+        .mbr-rastreio-ferramentas { position: absolute; left: 14px; top: calc(14px + var(--mbr-top-rastreio, 0px)); z-index: 10; max-width: calc(100% - 28px); }
+        .mbr-rastreio-legenda {
+          position: absolute;
+          right: 14px;
+          bottom: calc(14px + var(--mbr-bottom-rastreio, 0px));
+          z-index: 10;
+          background: rgba(14, 21, 18, 0.86);
+          border: 1px solid var(--rd-border);
+          border-radius: 999px;
+          padding: 8px 14px;
+          backdrop-filter: blur(6px);
+        }
+        .mbr-rastreio-stats {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          border: 1px solid var(--rd-border);
+          border-radius: 12px;
+          overflow: hidden;
+        }
+        .mbr-rastreio-stats > div { padding: 9px 10px; min-width: 0; }
+        .mbr-rastreio-stats > div + div { border-left: 1px solid var(--rd-border); }
+        /* na barra estreita as pílulas quebram em duas linhas em vez de sumir pro lado */
+        /* na barra estreita as pílulas quebram em duas linhas — e aí a moldura não pode
+           mais ser uma cápsula: com 999px de raio numa caixa de duas linhas a curva das
+           pontas passa por dentro das pílulas e o verde do "Todas" vazava pra fora.
+           Vira um retângulo de cantos arredondados, que acompanha as duas linhas. */
+        .mbr-rastreio-lista .mbr-filtros {
+          flex-wrap: wrap;
+          overflow-x: visible;
+          border-radius: 14px;
+          padding: 5px;
+          row-gap: 4px;
+        }
+        .mbr-rastreio-lista .mbr-filtros > button { padding: 5px 10px !important; font-size: 11.5px !important; }
+        .mbr-rastreio-cartao {
+          position: absolute;
+          right: 14px;
+          /* no celular o cartão desce um pouco pra não tampar os botões do mapa */
+          top: calc(62px + var(--mbr-top-rastreio, 0px));
+          z-index: 12;
+          width: 348px;
+          max-width: calc(100% - 28px);
+          background: rgba(14, 21, 18, 0.93);
+          border: 1px solid var(--rd-border);
+          border-radius: 18px;
+          padding: 16px;
+          backdrop-filter: blur(10px);
+          box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+        }
+        @media (min-width: 1024px) {
+          .mbr-rastreio-topo {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 18px;
+            padding: 14px 22px;
+            border-bottom: 1px solid var(--rd-border-soft);
+            background: var(--rd-shell);
+            border-radius: 17px 17px 0 0;
+          }
+          .mbr-rastreio-lista {
+            display: flex;
+            flex-direction: column;
+            width: 358px;
+            flex: none;
+            min-height: 0;
+            border-right: 1px solid var(--rd-border-soft);
+            background: var(--rd-shell);
+          }
+          .mbr-rastreio-cartao { top: 14px; }
+          .mbr-rastreio-ferramentas { top: 14px; }
+        }
+        /* o zoom e o "i" da atribuição sobem pra não cair em cima da legenda */
+        .mbr-rastreio .maplibregl-ctrl-bottom-right { bottom: calc(58px + var(--mbr-bottom-rastreio, 0px)); }
+
+        /* o pino da moto escolhida ganha um anel claro */
+        .mbr-map-marker--ativo > div > div:first-child { box-shadow: 0 0 0 4px rgba(214, 232, 208, 0.55), 0 1px 3px rgba(0, 0, 0, 0.5) !important; }
+
+        /* as duas colunas de Futuros: uma embaixo da outra no celular */
+        .mbr-futuros-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: var(--rd-s5);
+          align-items: stretch;
+        }
+        @media (min-width: 900px) {
+          .mbr-futuros-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        /* os sinais "−" e "=" da faixa de Futuros só fazem sentido com os três números
+           na mesma linha; empilhados no celular eles viram lixo visual */
+        .mbr-oper { display: none; }
+        @media (min-width: 760px) { .mbr-oper { display: inline; } }
+
+        /* faixa "entrou / saiu / saldo" do Caixa: empilha no celular, três colunas
+           divididas por um fio a partir do tablet */
+        .mbr-caixa-resumo { display: grid; grid-template-columns: minmax(0, 1fr); }
+        .mbr-caixa-resumo > div { padding: 14px 18px; border-top: 1px solid var(--rd-border); }
+        .mbr-caixa-resumo > div:first-child { border-top: none; }
+        @media (min-width: 760px) {
+          .mbr-caixa-resumo { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .mbr-caixa-resumo > div { border-top: none; }
+          .mbr-caixa-resumo > div + div { border-left: 1px solid var(--rd-border); }
+        }
+        .mbr-rodape-baixo { margin-top: auto; padding-top: var(--rd-s4); }
+
+        /* faixa de números da ficha (mensalidade, vencimento, ...): 2 por linha no
+           celular, 4 numa linha só a partir do tablet */
+        .mbr-ficha-stats {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          border: 1px solid var(--rd-border);
+          border-radius: 14px;
+          overflow: hidden;
+        }
+        .mbr-ficha-stats > div { padding: 12px 14px; border-top: 1px solid var(--rd-border); min-width: 0; }
+        .mbr-ficha-stats > div:nth-child(-n + 2) { border-top: none; }
+        .mbr-ficha-stats > div:nth-child(even) { border-left: 1px solid var(--rd-border); }
+        @media (min-width: 700px) {
+          .mbr-ficha-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          .mbr-ficha-stats > div { border-top: none; border-left: none; }
+          .mbr-ficha-stats > div + div { border-left: 1px solid var(--rd-border); }
+        }
+
+        /* BARRA LATERAL — fixa, nunca rola com a página. A altura em dvh é o que
+           mantém o pé dela (Ajustes e perfil) DENTRO do enquadramento: com 100vh o
+           Safari do iPad mede a tela sem as próprias barras, e o rodapé da barra
+           acabava escondido atrás da barra de baixo. */
+        .mbr-lateral {
+          height: 100vh;
+          height: 100dvh;
+          overflow: hidden;
+        }
+
+        /* o shell também em dvh: com 100vh o iPad ganhava uns pixels a mais de página
+           do que cabe na tela, e a Visão geral travada ainda balançava no dedo */
+        .mbr-shell { min-height: 100vh; min-height: 100dvh; }
       `}</style>
 
-      <header
-        ref={headerRef}
-        className="px-4 sm:px-8 py-3 grid items-center sticky top-0 z-40"
-        style={{
-          gridTemplateColumns: "1fr auto 1fr",
-          paddingTop: "calc(0.75rem + env(safe-area-inset-top, 0px))",
-          background:
-            tab === "rastreio"
-              ? `linear-gradient(to bottom, ${hexToRgba(theme.panel, 0.9)} 0%, ${hexToRgba(theme.panel, 0.9)} 50%, ${hexToRgba(theme.panel, 0)} 100%)`
-              : hexToRgba(theme.panel, 0.82),
-          borderBottom: tab === "rastreio" ? "none" : `1px solid ${theme.divider}`,
-          backdropFilter: tab === "rastreio" ? "none" : "saturate(1.6) blur(16px)",
-          WebkitBackdropFilter: tab === "rastreio" ? "none" : "saturate(1.6) blur(16px)",
-        }}
-      >
-        {tab === "rastreio" && <BorraProgressiva lado="topo" />}
-        <div />
-        <div className="flex justify-center">
-          <Wordmark logoDataUrl={configState.value.logoDataUrl} logoSize={configState.value.logoSize} />
-        </div>
-        <div className="flex justify-end">
-          {anyError && (
-            <span className="text-xs" style={{ color: theme.coral, fontFamily: BODY_FONT }}>
-              {anyError}
-            </span>
-          )}
-        </div>
-      </header>
+      <div style={{ display: "flex", alignItems: "flex-start" }}>
+        {/* SIDEBAR — desktop ≥1024px */}
+        <nav
+          className="mbr-desktop-only mbr-lateral"
+          style={{
+            flexDirection: "column",
+            gap: 26,
+            width: larguraMenu,
+            flex: "none",
+            position: "sticky",
+            top: 0,
+            background: "var(--rd-sidebar)",
+            borderRight: "1px solid var(--rd-border-soft)",
+            padding: menuRecolhido ? "22px 10px" : "22px 16px",
+            paddingBottom: "calc(22px + env(safe-area-inset-bottom, 0px))",
+            transition: "width 0.26s cubic-bezier(0.32, 0.72, 0, 1), padding 0.26s cubic-bezier(0.32, 0.72, 0, 1)" }}
+        >
+          <button
+            onClick={() => setMenuRecolhido((v) => !v)}
+            title={menuRecolhido ? "Abrir o menu" : "Recolher o menu"}
+            aria-label={menuRecolhido ? "Abrir o menu" : "Recolher o menu"}
+            className="flex items-center"
+            style={{ gap: 11, padding: menuRecolhido ? 0 : "0 8px", background: "none", justifyContent: menuRecolhido ? "center" : "flex-start" }}
+          >
+            {menuRecolhido ? (
+              <div style={{ width: 38, height: 38, overflow: "hidden", flex: "none" }}>
+                <img src="/logo-header.png" alt="Mobirelli" style={{ height: 38, width: "auto", maxWidth: "none", objectFit: "cover", objectPosition: "left" }} />
+              </div>
+            ) : (
+              <img src="/logo-header.png" alt="Mobirelli" style={{ height: 45, width: "auto", objectFit: "contain" }} />
+            )}
+            {!menuRecolhido && (
+              <PanelLeftClose size={16} strokeWidth={2.5} color="var(--rd-text-faint)" style={{ marginLeft: "auto" }} />
+            )}
+          </button>
 
-      {versaoNovaDisponivel && (
+          {/* recolhido, a logo já abre o menu — mas ninguém adivinha isso, então fica um
+              botãozinho explícito logo abaixo dela */}
+          {menuRecolhido && (
+            <button
+              onClick={() => setMenuRecolhido(false)}
+              title="Abrir o menu"
+              aria-label="Abrir o menu"
+              className="flex items-center justify-center"
+              style={{
+                marginTop: -14,
+                alignSelf: "center",
+                width: 30,
+                height: 26,
+                borderRadius: 9,
+                background: "var(--rd-surface)",
+                border: "1px solid var(--rd-border)",
+                color: "var(--rd-text-faint)" }}
+            >
+              <PanelLeftOpen size={15} strokeWidth={2.5} />
+            </button>
+          )}
+
+          <div className="flex flex-col" style={{ gap: 3 }}>
+            {!menuRecolhido && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  color: "var(--rd-text-faint)",
+                  padding: "0 10px 8px" }}
+              >
+                Operação
+              </span>
+            )}
+            {tabs.map((t) => {
+              const Icon = t.icon;
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  data-active={active}
+                  title={menuRecolhido ? t.label : undefined}
+                  className="mbr-nav-item flex items-center"
+                  style={{
+                    gap: 11,
+                    padding: 10,
+                    borderRadius: 11,
+                    background: active ? "var(--rd-brand)" : "transparent",
+                    color: active ? "#F0F5EE" : "var(--rd-text-muted)",
+                    fontWeight: active ? 600 : 500,
+                    textAlign: "left",
+                    justifyContent: menuRecolhido ? "center" : "flex-start",
+                    position: "relative" }}
+                >
+                  <Icon size={17} strokeWidth={2.75} style={{ flex: "none" }} />
+                  {!menuRecolhido && <span style={{ fontSize: 14 }}>{t.label}</span>}
+                  {t.pendente ? (
+                    menuRecolhido ? (
+                      /* recolhido não cabe o número — vira um pontinho no canto do ícone */
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: 7,
+                          right: 9,
+                          width: 7,
+                          height: 7,
+                          borderRadius: 999,
+                          background: "var(--rd-attention)" }}
+                      />
+                    ) : (
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          color: "var(--rd-attention)",
+                          background: "#2A2115",
+                          borderRadius: 999,
+                          padding: "2px 8px" }}
+                      >
+                        {t.pendente}
+                      </span>
+                    )
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Ajustes e perfil ficam no pé da barra — o que os escondia no iPad era a
+              altura em vh (ver .mbr-lateral), não o lugar deles */}
+          <div className="flex flex-col" style={{ gap: 3, marginTop: "auto" }}>
+            <button
+              onClick={() => setTab("config")}
+              data-active={tab === "config"}
+              title={menuRecolhido ? "Ajustes" : undefined}
+              className="mbr-nav-item flex items-center"
+              style={{
+                gap: 11,
+                padding: 10,
+                borderRadius: 11,
+                background: tab === "config" ? "var(--rd-brand)" : "transparent",
+                color: tab === "config" ? "#F0F5EE" : "#8A9A8C",
+                textAlign: "left",
+                justifyContent: menuRecolhido ? "center" : "flex-start" }}
+            >
+              <Settings size={17} strokeWidth={2.75} style={{ flex: "none" }} />
+              {!menuRecolhido && <span style={{ fontSize: 14, fontWeight: tab === "config" ? 600 : 500 }}>Ajustes</span>}
+            </button>
+            <div
+              className="flex items-center"
+              style={{
+                gap: 10,
+                padding: 10,
+                borderTop: "1px solid var(--rd-border-soft)",
+                marginTop: 8,
+                minWidth: 0,
+                justifyContent: menuRecolhido ? "center" : "flex-start" }}
+              title={menuRecolhido ? perfil?.username : undefined}
+            >
+              <AvatarIniciais username={perfil?.username} />
+              {!menuRecolhido && (
+                <span className="truncate" style={{ fontSize: 13, fontWeight: 500, color: "var(--rd-text-muted)" }}>
+                  {perfil?.username}
+                </span>
+              )}
+            </div>
+          </div>
+        </nav>
+
+        {/* COLUNA DE CONTEÚDO */}
+        <div
+          className={
+            "mbr-conteudo" +
+            (tab === "rastreio" ? " mbr-tela-fixa" : "") +
+            (tab === "dashboard" ? " mbr-tela-fixa-desktop" : "")
+          }
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            ...(tab === "rastreio" ? { overflow: "hidden", position: "relative" } : {}) }}
+        >
+          {/* no Rastreamento o header flutua ABSOLUTO por cima do mapa (que ocupa a
+              coluna inteira, de ponta a ponta) — é isso que faz o degradê do header
+              realmente se misturar com o mapa por trás, em vez de só desenhar um
+              header sólido em cima de uma faixa vazia. Nas outras abas ele continua
+              sticky, empurrando o conteúdo normalmente */}
+          <div ref={headerRef} style={tab === "rastreio" ? { position: "absolute", top: 0, left: 0, right: 0, zIndex: 40 } : { position: "sticky", top: 0, zIndex: 40 }}>
+            {/* header de conteúdo — desktop. Não aparece nas telas que já têm título
+                próprio: ali ele só repetia "Frota" em cima de "Frota" */}
+            <header
+              className="mbr-desktop-only"
+              style={{
+                display: telaTemTituloProprio ? "none" : undefined,
+                alignItems: "center",
+                gap: 16,
+                padding: "13px 28px",
+                position: "relative",
+                background:
+                  tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0E1512", 0.92)} 0%, ${hexToRgba("#0E1512", 0.92)} 55%, ${hexToRgba("#0E1512", 0)} 100%)` : "var(--rd-shell)",
+                borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
+            >
+              {tab === "rastreio" && <BorraProgressiva lado="topo" />}
+              <div className="flex flex-col" style={{ gap: 3 }}>
+                <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>{tituloTela}</h1>
+                <span style={{ fontSize: 12.5, color: "var(--rd-text-dim)" }}>{dataCabecalho}</span>
+              </div>
+            </header>
+
+            {/* header compacto — mobile/tablet (<1024px) */}
+            <header
+              className="mbr-mobile-only"
+              style={{
+                alignItems: "center",
+                gap: 12,
+                padding: "16px 20px",
+                position: "relative",
+                paddingTop: "calc(16px + env(safe-area-inset-top, 0px))",
+                background:
+                  tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0E1512", 0.92)} 0%, ${hexToRgba("#0E1512", 0.92)} 55%, ${hexToRgba("#0E1512", 0)} 100%)` : "var(--rd-shell)",
+                borderBottom: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
+            >
+              {tab === "rastreio" && <BorraProgressiva lado="topo" />}
+              <div style={{ width: 36, height: 36, overflow: "hidden", flex: "none", borderRadius: 9 }}>
+                <img src="/logo-header.png" alt="Mobirelli" style={{ height: 36, width: "auto", maxWidth: "none", objectFit: "cover", objectPosition: "left" }} />
+              </div>
+              <div className="flex flex-col" style={{ gap: 1, minWidth: 0 }}>
+                <span className="truncate" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--rd-text)" }}>
+                  {tituloTela}
+                </span>
+                <span className="truncate" style={{ fontSize: 11.5, color: "var(--rd-text-dim)" }}>
+                  {dataCabecalho}
+                </span>
+              </div>
+              <button
+                onClick={() => setTab("config")}
+                aria-label="Ajustes"
+                title="Ajustes"
+                style={{
+                  marginLeft: "auto",
+                  width: 34,
+                  height: 34,
+                  borderRadius: 999,
+                  background: "var(--rd-surface-2)",
+                  border: "1px solid var(--rd-border)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "var(--rd-text-muted)",
+                  flex: "none" }}
+              >
+                <Settings size={16} strokeWidth={2.75} />
+              </button>
+            </header>
+          </div>
+
+          {/* o aviso de erro vivia dentro do header do desktop; como ele some nas telas
+              com título próprio, o aviso passou a ter faixa própria pra nunca sumir */}
+          {anyError && (
+            <div
+              className="mbr-desktop-only"
+              style={{ padding: "10px 28px", background: "var(--rd-attention-bg)", borderBottom: "1px solid var(--rd-border-soft)" }}
+            >
+              <span style={{ fontSize: 12, color: "var(--rd-negative)" }}>{anyError}</span>
+            </div>
+          )}
+
+          {versaoNovaDisponivel && (
         // a centralização (translateX) fica num wrapper parado — a classe mbr-fade-in
         // anima "transform" (translateY) no elemento visível de dentro; se as duas
         // ficassem no mesmo elemento, a animação substituiria o translateX inteiro,
@@ -6952,8 +9920,7 @@ function AppAutenticado({ perfil, onSignOut }) {
               boxShadow: "0 4px 20px rgba(0,0,0,0.35)",
               fontFamily: BODY_FONT,
               fontSize: 12,
-              fontWeight: 600,
-            }}
+              fontWeight: 600 }}
           >
             <span className="truncate" style={{ flex: "1 1 auto", minWidth: 0 }}>
               Versão nova disponível
@@ -6969,14 +9936,21 @@ function AppAutenticado({ perfil, onSignOut }) {
         </div>
       )}
 
-      <main
-        className={tab === "rastreio" ? "" : "px-4 sm:px-8 pt-5 max-w-5xl mx-auto lg:max-w-7xl"}
-        style={
-          tab === "rastreio"
-            ? { position: "fixed", inset: 0, overflow: "hidden", zIndex: 0 }
-            : { paddingBottom: "calc(84px + env(safe-area-inset-bottom, 0px))" }
-        }
-      >
+          <main
+            className={
+              tab === "rastreio"
+                ? ""
+                : `mbr-main-pad-bottom px-4 sm:px-8 pt-5 max-w-5xl mx-auto lg:max-w-7xl${telaTemTituloProprio ? " lg:pt-7" : ""}`
+            }
+            // width:100% + minWidth:0 são obrigatórios aqui. O <main> tem "mx-auto" (margem
+            // lateral automática, pra centralizar), e margem automática no eixo cruzado
+            // DESLIGA o stretch do flex: sem largura explícita, o <main> passa a se medir
+            // pelo próprio conteúdo (min-content) e ignora a largura da janela. Era isso
+            // que empurrava a página toda pro lado no celular — o <main> ficava com 494px
+            // numa tela de 390px, e o site inteiro ia junto. Com width:100% ele volta a
+            // obedecer a coluna, e o "max-w-*" continua limitando no desktop.
+            style={tab === "rastreio" ? { position: "absolute", inset: 0 } : { width: "100%", minWidth: 0 }}
+          >
         {loading ? (
           <div className="flex flex-col gap-3">
             <div className="mbr-skel" style={{ height: 90 }} />
@@ -6989,7 +9963,14 @@ function AppAutenticado({ perfil, onSignOut }) {
         ) : (
           <div key={tab} className="mbr-fade-in" style={tab === "rastreio" ? { height: "100%" } : undefined}>
             {tab === "dashboard" ? (
-              <DashboardView motos={motosState.items} lancamentos={fluxoState.items} clientes={clientesState.items} futuros={futurosState.items} />
+              <DashboardView
+                motos={motosState.items}
+                lancamentos={fluxoState.items}
+                clientes={clientesState.items}
+                futuros={futurosState.items}
+                config={configState.value}
+                onIrPara={setTab}
+              />
             ) : tab === "motos" ? (
               <MotosView
                 motos={motosState.items}
@@ -6999,6 +9980,8 @@ function AppAutenticado({ perfil, onSignOut }) {
                 config={configState.value}
                 lancamentos={fluxoState.items}
                 persistLancamentos={fluxoState.persist}
+                motoInicial={motoParaAbrir}
+                onAbriuMoto={() => setMotoParaAbrir(null)}
               />
             ) : tab === "clientes" ? (
               <ClientesView
@@ -7006,6 +9989,8 @@ function AppAutenticado({ perfil, onSignOut }) {
                 persistClientes={clientesState.persist}
                 motos={motosState.items}
                 persistMotos={motosState.persist}
+                lancamentos={fluxoState.items}
+                persistLancamentos={fluxoState.persist}
               />
             ) : tab === "fluxo" ? (
               <FluxoCaixaView
@@ -7023,85 +10008,71 @@ function AppAutenticado({ perfil, onSignOut }) {
                 clientes={clientesState.items}
                 topInset={chromeHeights.header}
                 bottomInset={chromeHeights.nav}
+                onAbrirMoto={(id) => {
+                  setMotoParaAbrir(id);
+                  setTab("motos");
+                }}
               />
             ) : (
-              <ConfiguracoesView config={configState.value} persist={configState.persist} perfil={perfil} onSignOut={onSignOut} />
+              <ConfiguracoesView
+                config={configState.value}
+                persist={configState.persist}
+                perfil={perfil}
+                onSignOut={onSignOut}
+                motos={motosState.items}
+                clientes={clientesState.items}
+                lancamentos={fluxoState.items}
+                futuros={futurosState.items}
+              />
             )}
           </div>
         )}
-      </main>
+          </main>
+        </div>
 
-      <nav
-        ref={navRef}
-        className="fixed bottom-0 left-0 right-0 z-40 flex items-stretch justify-around px-2 py-1.5"
-        style={{
-          background:
-            tab === "rastreio"
-              ? `linear-gradient(to bottom, ${hexToRgba(theme.panel, 0)} 0%, ${hexToRgba(theme.panel, 0.9)} 50%, ${hexToRgba(theme.panel, 0.9)} 100%)`
-              : hexToRgba(theme.panel, 0.82),
-          borderTop: tab === "rastreio" ? "none" : `1px solid ${theme.divider}`,
-          paddingBottom: "calc(6px + env(safe-area-inset-bottom, 0px))",
-          backdropFilter: tab === "rastreio" ? "none" : "saturate(1.6) blur(16px)",
-          WebkitBackdropFilter: tab === "rastreio" ? "none" : "saturate(1.6) blur(16px)",
-        }}
-      >
-        {tab === "rastreio" && <BorraProgressiva lado="base" />}
-        {pilulaRect && (
-          <span
-            onPointerDown={iniciarArrasto}
-            onPointerMove={moverArrasto}
-            onPointerUp={soltarArrasto}
-            onPointerCancel={soltarArrasto}
-            className="absolute rounded-full"
-            style={{
-              left: 0,
-              top: pilulaRect.top,
-              width: pilulaRect.width,
-              height: pilulaRect.height,
-              background: hexToRgba(theme.mint, 0.16),
-              zIndex: -1,
-              cursor: "grab",
-              touchAction: "none",
-              willChange: "transform",
-              // transform em vez de "left" — anima só na composição da GPU, sem
-              // recalcular layout a cada quadro, então fica fluido em qualquer taxa de
-              // atualização da tela (inclusive 120Hz), em vez de travar feito antes
-              transform: `translateX(${(arrastando ? dragLeft : pilulaRect.left) ?? 0}px)`,
-              transition: arrastando ? "none" : "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)",
-            }}
-          />
-        )}
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              aria-label={t.label}
-              title={t.label}
-              className="flex-1 flex items-center justify-center py-1.5"
-              style={{
-                color: active ? theme.mint : theme.textGhost,
-                background: "none",
-                transition: "color 0.15s ease, transform 0.18s ease",
-                // na aba ativa, o botão "cede o lugar" pra pílula (que fica embaixo dele
-                // nessa mesma área) poder receber o toque/arrasto — clicar nela de
-                // qualquer jeito não faria nada, já que é a aba em que já se está
-                pointerEvents: active ? "none" : "auto",
-              }}
-            >
-              <span
-                ref={(el) => (tabSlotRefs.current[t.id] = el)}
-                className="relative rounded-full flex items-center justify-center"
-                style={{ width: 44, height: 44, zIndex: 1 }}
+        {/* TAB BAR — mobile/tablet (<1024px) */}
+        <nav
+          ref={navRef}
+          className="mbr-mobile-only fixed bottom-0 left-0 right-0 z-40 items-center justify-around"
+          style={{
+            padding: "12px 16px",
+            paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
+            background:
+              tab === "rastreio" ? `linear-gradient(to bottom, ${hexToRgba("#0B110E", 0)} 0%, ${hexToRgba("#0B110E", 0.94)} 45%, ${hexToRgba("#0B110E", 0.94)} 100%)` : "var(--rd-sidebar)",
+            borderTop: tab === "rastreio" ? "none" : "1px solid var(--rd-border-soft)" }}
+        >
+          {tab === "rastreio" && <BorraProgressiva lado="base" />}
+          {tabs.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                aria-label={t.labelMobile}
+                title={t.labelMobile}
+                className="flex flex-col items-center"
+                style={{ gap: 5, background: "none", position: "relative", color: active ? "var(--rd-brand-light)" : "var(--rd-text-faint)" }}
               >
-                <Icon size={24} strokeWidth={active ? 2.4 : 2} className="mbr-tab-icon" />
-              </span>
-            </button>
-          );
-        })}
-      </nav>
+                <Icon size={21} strokeWidth={2.75} className="mbr-tab-icon" />
+                <span style={{ fontSize: 10, fontWeight: active ? 700 : 600 }}>{t.labelMobile}</span>
+                {t.pendente ? (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: -3,
+                      right: 2,
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      background: "var(--rd-attention)" }}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
     </div>
   );
 }
