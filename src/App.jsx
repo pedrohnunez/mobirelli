@@ -5246,48 +5246,6 @@ function FuturoModal({ futuro, onClose, onSave, onDelete, editando, motos }) {
         </>
       )}
 
-      {!maisOpcoes ? (
-        <button
-          type="button"
-          onClick={() => setMaisOpcoes(true)}
-          className="text-xs font-semibold mb-3"
-          style={{ color: theme.mint, fontFamily: BODY_FONT }}
-        >
-          + Mais opções (natureza, moto, detalhe extra)
-        </button>
-      ) : (
-        <>
-          <FieldLabel>Natureza</FieldLabel>
-          <SelectField value={form.natureza} onChange={set("natureza")} options={NATUREZAS.map((n) => ({ value: n, label: n }))} />
-          <FieldLabel>Categoria (opcional)</FieldLabel>
-          <input style={inputStyle} value={form.categoria} onChange={set("categoria")} placeholder="Pra agrupar contas parecidas" />
-          {(motos || []).length > 0 && (
-            <>
-              <FieldLabel>Moto relacionada (opcional)</FieldLabel>
-              <SelectField
-                value={form.motoId || ""}
-                onChange={(e) => setForm({ ...form, motoId: e.target.value })}
-                options={[
-                  { value: "", label: "Nenhuma / não é de uma moto específica" },
-                  ...motos.map((m) => ({ value: m.id, label: `${formatPlaca(m.placa)} — ${m.modelo || "modelo?"}` })),
-                ]}
-              />
-              {!editando && (
-                <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: theme.text, fontFamily: BODY_FONT }}>
-                  <input
-                    type="checkbox"
-                    checked={form.aplicarTodas}
-                    onChange={(e) => setForm({ ...form, aplicarTodas: e.target.checked })}
-                  />
-                  Aplicar a todas as motos ({motos.length}) — lança uma conta dessas pra cada moto
-                </label>
-              )}
-            </>
-          )}
-          <FieldLabel>Detalhe extra (opcional)</FieldLabel>
-          <input style={inputStyle} value={form.descricao} onChange={set("descricao")} placeholder="Alguma observação a mais, se precisar" />
-        </>
-      )}
       <div className="flex gap-2">
         <button
           onClick={salvar}
