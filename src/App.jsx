@@ -5376,9 +5376,17 @@ const FuturosView = forwardRef(function FuturosView(
         : quantosDias > 1
           ? ` (essa é 1 dos ${quantosDias} dias de vencimento; os outros continuam)`
           : "";
-    if (!window.confirm(`Excluir a conta futura "${rotulo}"${aviso}?`)) return;
-    await persist(futuros.filter((x) => x.id !== id));
+    if (!window.confirm(`Excluir a conta futura "${rotulo}"${aviso}?`)) return false;
+    // persist() atualiza a tela na hora (otimista) mas pode falhar ao salvar de verdade —
+    // sem conferir o retorno, a conta "voltava" sozinha (a tela mostrava excluída, mas no
+    // banco continuava lá) sem avisar nada
+    const ok = await persist(futuros.filter((x) => x.id !== id));
+    if (!ok) {
+      window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
+      return false;
+    }
     onExcluido?.(alvo, rotulo);
+    return true;
   };
 
   const mes = mesVisivel || mesAtualKey;
@@ -5511,9 +5519,8 @@ const FuturosView = forwardRef(function FuturosView(
           editando={futuros.some((x) => x.id === modal.id)}
           onClose={() => setModal(null)}
           onSave={salvar}
-          onDelete={() => {
-            excluir(modal.id);
-            setModal(null);
+          onDelete={async () => {
+            if (await excluir(modal.id)) setModal(null);
           }}
         />
       )}
@@ -5624,11 +5631,16 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
 
   const excluir = async (id) => {
     const alvo = lancamentos.find((x) => x.id === id);
-    if (!alvo) return;
+    if (!alvo) return false;
     const rotulo = `${alvo.categoria || alvo.descricao || "Lançamento"} · ${formatCurrency(alvo.valor)}`;
-    if (!window.confirm(`Excluir ${alvo.tipo === "entrada" ? "a entrada" : "a saída"} "${rotulo}" de ${formatDate(alvo.data)}?`)) return;
-    await persist(lancamentos.filter((x) => x.id !== id));
+    if (!window.confirm(`Excluir ${alvo.tipo === "entrada" ? "a entrada" : "a saída"} "${rotulo}" de ${formatDate(alvo.data)}?`)) return false;
+    const ok = await persist(lancamentos.filter((x) => x.id !== id));
+    if (!ok) {
+      window.alert("Não foi possível excluir agora. Confira sua internet e tente de novo.");
+      return false;
+    }
     oferecerDesfazer(rotulo, alvo, "lancamento");
+    return true;
   };
   const ordenados = [...lancamentos].sort((a, b) => (a.data < b.data ? 1 : -1));
 
@@ -6402,9 +6414,8 @@ function FluxoCaixaView({ lancamentos, persist, motos, clientes, futuros, persis
           editando={lancamentos.some((x) => x.id === modal.id)}
           onClose={() => setModal(null)}
           onSave={salvar}
-          onDelete={() => {
-            excluir(modal.id);
-            setModal(null);
+          onDelete={async () => {
+            if (await excluir(modal.id)) setModal(null);
           }}
           motos={motos}
         />
